@@ -20,8 +20,8 @@ import { useCallback, useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
+  Camera,
   ChevronRight,
-  FilePlus2,
   RotateCcw,
   Settings,
   Store,
@@ -163,7 +163,7 @@ export function SuppliersPage(): JSX.Element {
         onClick={() => navigate('/receipt/new')}
         className="md:w-auto md:self-start"
       >
-        <FilePlus2 size={20} aria-hidden /> Нова накладна
+        <Camera size={20} aria-hidden /> Сканувати накладну
       </Button>
 
       {state === 'loading' && (
