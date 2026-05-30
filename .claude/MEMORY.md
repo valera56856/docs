@@ -1,50 +1,55 @@
 # Valeraup — пам'ять агента (working memory)
 
-Це зафіксований контекст для будь-якого агента/розробника, що підхоплює проєкт.
-Деталі статусу й roadmap — у [`docs/STATUS.md`](../docs/STATUS.md); інженерні
-стандарти — у [`CLAUDE.md`](../CLAUDE.md).
+Зафіксований контекст для агента/розробника, що підхоплює проєкт. Статус і roadmap —
+[`docs/STATUS.md`](../docs/STATUS.md); інженерні стандарти — [`CLAUDE.md`](../CLAUDE.md).
 
 ## Що це
-**Valeraup** — окремий продукт (на дизайн-системі NextCRM). Менеджер фотографує
-накладну постачальника (PWA) → Gemini 2.5 Flash OCR → маппінг артикулів
-постачальника на каталог SalesDrive (auto/manual + «запам'ятати») → генерація
-.xlsx надходження для **ручного** імпорту в SalesDrive (прямого API нема).
-
-- Репо `github.com/valera56856/docs` (назва «docs» оманлива — тут увесь монорепо).
-- Монорепо: `backend/` (Django 5.1 + DRF + Celery, 5 апок), `frontend/`
-  (React 19 + Vite PWA + Capacitor + Storybook), `docs/`, dev+prod compose.
+**Valeraup** — PWA: менеджер фотографує накладну постачальника → Gemini 2.5 Flash OCR →
+маппінг артикулів постачальника на каталог SalesDrive (auto/manual + «запам'ятати») →
+генерація `.xlsx` надходження для **ручного** імпорту в SalesDrive (прямого API нема:
+каталог читається з YML-експорту, надходження — Excel-імпорт вручну). Репо
+`github.com/valera56856/docs` (увесь монорепо). Backend Django 5.1+DRF+Celery (5 апок),
+frontend React 19+Vite PWA+Capacitor.
 
 ## Статус
-Story 1–13 **код-комплітні, верифіковані, у `main`**. Backend pytest **81/81 на
-Postgres 16**; frontend `tsc -b` + `vite build` зелені. Не зроблено: реальний
-деплой, реальні креди (Gemini/SalesDrive/R2), збірка Capacitor на пристрої.
+Story 1–14 **код-комплітні, верифіковані, у `main`**. Backend **pytest 123/123 на
+Postgres 16**; frontend `tsc -b`+`vite build` зелені. Story 14 = екран «Налаштування»
+(`/admin`) через дизайн: SalesDrive (DB-URL+тест+синк), CRUD постачальників, керування
+маппінгами. Не зроблено: живий OCR (треба GEMINI_API_KEY), деплой, Capacitor device,
+керування користувачами.
 
-## Рецепт верифікації (reusable)
-- Backend: Python 3.10+ venv, `pip install -r backend/requirements.txt`. Тести
-  ганяти на **Postgres**, не sqlite (sqlite `icontains`/LIKE не case-insensitive
-  для кирилиці → хибний фейл пошуку): `postgres:16-alpine`. Env: SECRET_KEY,
-  DATABASE_URL, CELERY_*, GEMINI_API_KEY(''), GEMINI_MODEL, SALESDRIVE_YML_URL.
-  Міграції **закомічені** — `makemigrations` лише при зміні моделей.
-- Frontend: Node 20+, `npm install && npm run build`.
+## Локальний запуск
+`docker compose up -d`. У dev порти можуть конфліктувати з іншими проєктами (5173/8000/
+5432) — тоді перемапити (PWA/API/db). Демо-логіни після сіду: admin@valeraup.local /
+admin12345 (admin, PIN 1234), op@valeraup.local / op12345 (PIN 1111). GEMINI_API_KEY
+порожній → OCR повертає 0 рядків (offline-guard).
 
-## Граблі (не повторювати)
-- Логи: ключі в `extra={}` не мають збігатися з полями `LogRecord`
-  (created/name/module/message/args/process/...) → `KeyError`. Тут `was_created`,
-  `created_count`.
-- Profile авто-створюється `post_save`-сигналом — у тестах НЕ створювати вручну.
-- `lucide-react` на **1.x** (`^1.17.0`). tsconfig — канонічний solution-layout
-  Vite (`tsconfig.json` → `tsconfig.app.json` + `tsconfig.node.json`).
-- Фронт у стилі shadcn: Tailwind v3 + CVA + Radix (Slot/Dialog) + токени NextCRM
-  як CSS-змінні (dark/light). `@nextcrm/tokens` поки НЕ підключати (приватний).
+## Граблі (НЕ повторювати) — критичні зверху
+- **`.gitignore` `lib/`** (Python-шаблон) мовчки ігнорував **`frontend/src/lib/`** —
+  api.ts/auth.tsx/cn.ts/camera.ts/useTheme.ts не комітились, репо-фронт не збирався.
+  Прибрано `lib/`+`lib64/`. УРОК: широкі патерни (`lib/`,`build/`,`dist/`) ловлять і
+  фронтові теки — перевіряй `git check-ignore`, не лише локальний build.
+- **Email-логін 500 `KeyError 'email'`**: кастомний `EmailTokenObtainPairSerializer` не
+  має делегувати в `super().validate` SimpleJWT (він читає `attrs['email']`) — автентифікуй
+  по реальному username + `get_token()`. pytest минав (фікстура мінтила токен напряму) →
+  **реально запускай застосунок**, не лише юніт-тести.
+- **colima bind-mount reload ненадійний:** Django runserver / Vite HMR у контейнері не
+  бачать змін з хоста → `docker compose restart backend|frontend`.
+- **Тести на Postgres, не sqlite** (sqlite `icontains` не case-insensitive для кирилиці).
+- Структуровані логи: ключі `extra={}` ≠ полям `LogRecord` (created/name/module/message…)
+  → KeyError. Тут `was_created`/`created_count`.
+- Profile авто-створюється `post_save`-сигналом (у тестах не створювати вручну).
+  `lucide-react` 1.x. tsconfig — solution-layout Vite. Фронт shadcn-стиль (Tailwind v3 +
+  CVA + Radix + токени NextCRM як CSS-змінні, dark/light). Міграції закомічені; CI має
+  `makemigrations --check`.
 
 ## Архітектурні рішення
-- `ReceiptPhoto.image` (ImageField, R2/default_storage) — щоб OCR-таск читав
-  байти; `image_url` дзеркалить `image.url`. Flow: create draft → POST
-  `{id}/photos/` (multipart) → recognize → таблиця → map → generate-xlsx.
+- `IntegrationSettings` (singleton pk=1, `apps/catalog/models.py`) — SalesDrive YML-URL у
+  БД, редагується з UI. Резолвинг: аргумент → DB → env. `GET/PUT /api/settings/salesdrive/`,
+  `POST .../test/` (probe без запису, завжди 200).
+- Постачальники `SupplierViewSet` (оператор бачить активних, адмін мутує; DELETE з
+  накладними → 409). Маппінги `ArticleMappingViewSet` `/api/mappings/` (IsAdmin, ?supplier/?q;
+  курація НЕ інкрементує times_used).
+- `ReceiptPhoto.image` (ImageField, R2/default_storage) для OCR-байтів. xlsx: дублі
+  групуються, ціна середньозважена (ТЗ §16). Авторизація рольова (`IsAdmin` по `Profile.role`).
 - Gemini — реальний `google-genai` (lazy import, offline-guard по GEMINI_API_KEY).
-- xlsx: дублі групуються, к-ть сумується, ціна = середньозважена (ТЗ §16 —
-  бізнес ще має підтвердити).
-- Авторизація рольова: `apps.accounts.permissions.IsAdmin/IsOperatorOrAdmin`.
-
-## Org-TODO (ТЗ §16)
-Звірити колонки Excel із шаблоном SalesDrive; рішення по ціні дублів.
