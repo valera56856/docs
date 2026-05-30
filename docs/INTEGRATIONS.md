@@ -15,7 +15,9 @@ be **verified against the live SalesDrive UI before production use**.
 | Code | Purpose |
 | --- | --- |
 | [`backend/integrations/salesdrive.py`](../backend/integrations/salesdrive.py) | Fetch + parse SalesDrive YML catalog |
-| [`backend/apps/catalog/services.py`](../backend/apps/catalog/services.py) | Upsert parsed offers into `OurProduct` |
+| [`backend/apps/catalog/services.py`](../backend/apps/catalog/services.py) | Upsert parsed offers into `OurProduct` (`sync_catalog`); read-only probe (`probe_catalog_yml`) |
+| [`backend/apps/catalog/models.py`](../backend/apps/catalog/models.py) | `IntegrationSettings` singleton (DB-stored YML URL) |
+| [`backend/apps/catalog/views.py`](../backend/apps/catalog/views.py) | Admin Settings API: `GET/PUT /api/settings/salesdrive/`, `POST .../test/`, `POST /api/sync/catalog/` |
 | [`backend/apps/catalog/management/commands/sync_catalog.py`](../backend/apps/catalog/management/commands/sync_catalog.py) | CLI catalog sync (`manage.py sync_catalog`) |
 | [`backend/apps/receipts/services/xlsx.py`](../backend/apps/receipts/services/xlsx.py) | Build the receipt `.xlsx` for SalesDrive import (group + weighted price) |
 | [`backend/integrations/gemini.py`](../backend/integrations/gemini.py) | Gemini Vision OCR of invoice photos (real `google-genai` call) |
@@ -31,21 +33,35 @@ directions**, neither of which uses a direct REST API:
   "shop" file (the Yandex Market XML dialect). Valeraup downloads and mirrors it.
 - **Receipt out (write):** Valeraup generates an `.xlsx` file that a manager
   **manually** imports into SalesDrive. There is intentionally no programmatic
-  write path — see [§1.4](#14-receipt-import-manual-step).
+  write path — see [§1.5](#15-receipt-import-manual-step).
 
 ### 1.1 YML catalog export
 
-The catalog URL is configured once via the `SALESDRIVE_YML_URL` env var. To
-obtain it in the SalesDrive admin:
+The catalog URL is **configured in the database** (admin-editable through the
+designed Settings PWA) with the `SALESDRIVE_YML_URL` env var as a deploy-time
+**fallback**. To obtain the URL in the SalesDrive admin:
 
 > **Установки → Товари/Послуги → Експорт YML**
 
-That screen produces a stable, fully-qualified URL to a generated YML file. Put
-it in `backend/.env`:
+That screen produces a stable, fully-qualified URL to a generated YML file.
+
+**Where the URL lives now.** It is stored on the `IntegrationSettings` singleton
+(`apps.catalog.models.IntegrationSettings`, see [§1.4](#14-db-configurable-yml-url-the-settings-api)),
+edited via `PUT /api/settings/salesdrive/`. The env var remains as a fallback for
+fresh deploys before the row is set:
 
 ```dotenv
+# Optional fallback; the DB value (set in the Settings UI) takes precedence.
 SALESDRIVE_YML_URL=https://example.salesdrive.ua/export/yml/
 ```
+
+**Resolution order** (in `sync_catalog`, highest priority first):
+
+1. the explicit `yml_url` argument (a one-off override / test),
+2. `IntegrationSettings.load().salesdrive_yml_url` (set in the Settings UI),
+3. `settings.SALESDRIVE_YML_URL` (env fallback).
+
+`sync_catalog` raises `ValueError` only when **all three** are blank.
 
 **Fetch.** `integrations.salesdrive.fetch_catalog_yml(yml_url)` performs a plain
 `requests.get` with a split timeout — a short connect timeout to fail fast on a
@@ -117,7 +133,10 @@ default — sufficient hardening for a trusted account export.
 `integrations.salesdrive` stays free of Django ORM concerns. The upsert lives in
 `apps.catalog.services.sync_catalog(yml_url)`:
 
-- Falls back to `settings.SALESDRIVE_YML_URL` when called with a falsy URL.
+- Resolves the URL in priority order — explicit argument →
+  `IntegrationSettings.salesdrive_yml_url` (DB) → `settings.SALESDRIVE_YML_URL`
+  (env) — and raises `ValueError` only when all three are blank (see
+  [§1.1](#11-yml-catalog-export)).
 - Wraps all writes in a single `transaction.atomic()` so a sync that fails
   halfway never leaves the cache torn / half-updated.
 - Upserts each offer with `OurProduct.objects.update_or_create(salesdrive_id=…)`
@@ -142,9 +161,59 @@ flowchart LR
 
 The API endpoint and the Celery beat go through the async `sync_catalog_task`
 (`apps.catalog.tasks`); the CLI command and tests call `sync_catalog` directly
-(synchronously). All four converge on the same idempotent upsert.
+(synchronously). All four converge on the same idempotent upsert. The admin
+«Синхронізувати» button in the Settings PWA simply hits `POST /api/sync/catalog/`
+(the first arm above).
 
-### 1.4 Receipt import (manual step)
+### 1.4 DB-configurable YML URL: the Settings API
+
+The YML URL and a small catalog-status summary are managed from the designed
+**Settings PWA** (`/admin` → «Налаштування») instead of Django admin or a
+redeploy. Three admin-only endpoints back that screen (all
+`IsAuthenticated` + `apps.accounts.permissions.IsAdmin` — the product `admin`
+role on `Profile`, **not** Django's `is_staff`), implemented in
+`apps.catalog.views`:
+
+| Method & path | View | Behaviour |
+| --- | --- | --- |
+| `GET /api/settings/salesdrive/` | `SalesDriveSettingsView.get` | Returns `{salesdrive_yml_url, last_synced, product_count}`. |
+| `PUT /api/settings/salesdrive/` | `SalesDriveSettingsView.put` | Saves `{salesdrive_yml_url}` onto the singleton; returns the **same** read shape so the UI re-renders without a follow-up `GET`. A blank URL is valid — it clears the value and re-arms the env fallback. |
+| `POST /api/settings/salesdrive/test/` | `SalesDriveTestView.post` | Probes a URL (body `{salesdrive_yml_url}` if present, else the stored one) and returns `{ok, product_count, error}`. |
+
+**The read shape** (`SalesDriveSettingsReadSerializer`) bundles the stored config
+with two derived figures so the screen renders in one round-trip:
+
+- `salesdrive_yml_url` — the stored value (`IntegrationSettings.load()`),
+- `last_synced` — `OurProduct.objects.aggregate(Max("last_synced"))`, or `null`
+  if the catalog has never been synced,
+- `product_count` — `OurProduct.objects.count()`.
+
+**The singleton.** `IntegrationSettings` (`apps.catalog.models`) is a one-row
+config table: `save()` pins `self.pk = 1` and `load()` is a `get_or_create(pk=1)`
+classmethod, so there is exactly one config row no matter how many times it is
+instantiated. The WHY: a redeploy-free, durable home for the URL without inventing
+a key/value store. It is also registered in Django admin (add disabled once the
+row exists, delete disabled — clear the URL instead) as a secondary inspection
+view; the **primary** editing surface is the PWA.
+
+**Test connection always returns HTTP 200.** `probe_catalog_yml(yml_url)`
+(`apps.catalog.services`) runs the same `fetch_catalog_yml` + `parse_catalog_yml`
+boundary calls as a sync but performs **no** database write, returning
+`{"product_count": n}`. It deliberately lets exceptions propagate; the view
+catches **any** exception (bad URL, unreachable host, malformed YML, or an empty
+URL anywhere) and converts it into `{"ok": false, "product_count": null, "error":
+str(exc)}` with **HTTP 200**. The WHY: a failed connectivity test is an expected
+*result*, not a server fault — returning 200 lets the UI show a friendly inline
+message instead of a generic 5xx. A successful probe returns `{"ok": true,
+"product_count": n, "error": null}`. It logs `salesdrive_settings_test_ok` /
+`salesdrive_settings_test_failed` (the error string never contains secrets);
+`PUT` logs `salesdrive_settings_saved` with a `has_url` boolean (the URL itself is
+not logged).
+
+> Probing **never mutates the cache** — only `sync_catalog` writes. So an admin
+> can validate a URL, then click «Зберегти» and «Синхронізувати» to commit it.
+
+### 1.5 Receipt import (manual step)
 
 There is **no direct API write** to SalesDrive. The manager imports the generated
 `.xlsx` by hand:

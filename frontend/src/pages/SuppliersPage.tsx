@@ -14,9 +14,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight, RotateCcw, Store } from 'lucide-react';
+import { ChevronRight, RotateCcw, Settings, Store } from 'lucide-react';
 
-import { suppliers as suppliersApi, receipts as receiptsApi } from '@/lib/api';
+import {
+  authApi,
+  suppliers as suppliersApi,
+  receipts as receiptsApi,
+} from '@/lib/api';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -40,6 +44,28 @@ export function SuppliersPage(): JSX.Element {
   const [items, setItems] = useState<Supplier[]>([]);
   /** Id of the supplier whose receipt is being created (disables that row). */
   const [creatingId, setCreatingId] = useState<number | null>(null);
+  /**
+   * Whether the current user is an admin — gates the «Налаштування» gear in the
+   * header. A best-effort `me()` check; on failure we simply hide the gear (the
+   * /admin route enforces the real role boundary server-side anyway).
+   */
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  // Resolve the role once for the settings affordance (non-fatal on failure).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await authApi.me();
+        if (!cancelled) setIsAdmin(me.role === 'admin');
+      } catch {
+        /* non-fatal: gear stays hidden */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   /** Fetch active suppliers; sets the load state accordingly. */
   const load = useCallback(async () => {
@@ -90,7 +116,20 @@ export function SuppliersPage(): JSX.Element {
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)]">
       <header className="flex items-center justify-between gap-2">
         <h1 className="text-[var(--font-size-xl)]">Оберіть постачальника</h1>
-        <ThemeToggle />
+        <div className="flex items-center gap-1">
+          {isAdmin && (
+            <Button
+              intent="ghost"
+              size="icon"
+              aria-label="Налаштування"
+              title="Налаштування"
+              onClick={() => navigate('/admin')}
+            >
+              <Settings size={20} aria-hidden />
+            </Button>
+          )}
+          <ThemeToggle />
+        </div>
       </header>
 
       {state === 'loading' && (

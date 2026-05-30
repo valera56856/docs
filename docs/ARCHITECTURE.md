@@ -88,9 +88,9 @@ Five domain apps under `backend/apps/` (AppConfig name `apps.<x>`):
 | App | Models (`models.py`) | Responsibility |
 |-----|----------------------|----------------|
 | `accounts`  | `Profile` (role, `pin_hash`)        | JWT + PIN auth; profile/role. A `post_save` signal (`signals.ensure_profile`) auto-creates a `Profile(role='operator')` per user; `permissions.IsAdmin`/`IsOperatorOrAdmin` gate views on `profile.role`. |
-| `suppliers` | `Supplier`                          | Supplier directory. |
-| `catalog`   | `OurProduct`                        | Local cache of the SalesDrive catalog (mirrored from YML). CLI sync via `manage.py sync_catalog`. |
-| `mapping`   | `ArticleMapping`                    | Remembered supplier-SKU → product links (learning). |
+| `suppliers` | `Supplier`                          | Supplier directory. Full CRUD via `SupplierViewSet` (operators list active vendors; only admins mutate). |
+| `catalog`   | `OurProduct`, `IntegrationSettings` (singleton) | Local cache of the SalesDrive catalog (mirrored from YML). CLI sync via `manage.py sync_catalog`; admin Settings API for the DB-stored YML URL + test connection. |
+| `mapping`   | `ArticleMapping`                    | Remembered supplier-SKU → product links (learning). Admin CRUD via `ArticleMappingViewSet` (`/api/mappings/`). |
 | `receipts`  | `Receipt`, `ReceiptPhoto` (`image` + `image_url`), `ReceiptLine` | The receipt workflow, OCR lines, statuses, Excel. Status machine in `services/status.py`. |
 
 Two integration modules under `backend/integrations/`:
@@ -115,13 +115,21 @@ Two integration modules under `backend/integrations/`:
   `/receipt/:id` (recognized lines + inline edit + mapping), `/receipt/:id/generate`,
   `/admin`. Every route except `/` is wrapped in a `RequireAuth` guard; `/admin`
   additionally checks `role === 'admin'` (via `/auth/me/`) and redirects non-admins.
+  `/admin` is the «Налаштування» (Settings) hub — `SuppliersPage` shows a gear
+  icon linking to it only for admins (a best-effort `authApi.me()` check; the real
+  boundary stays server-side).
 - `src/App.tsx` — wraps the tree in `ThemeProvider` + `Toaster` + `AuthProvider` +
   the router.
 - `src/lib/api.ts` — fetch wrapper holding the JWT **access** token in memory and
   refreshing via `/api/auth/refresh/`; base URL from
-  `import.meta.env.VITE_API_BASE_URL`. Exposes typed calls (`suppliers.list`,
-  `products.search`, `receipts.{create,get,uploadPhoto,recognize,generateXlsx}`,
-  `lines.{patch,map}`, `auth.{setPin,…}`, `catalog.sync`). File uploads use
+  `import.meta.env.VITE_API_BASE_URL`. Exposes typed grouped calls:
+  `suppliers.{list,create,update,remove}` (admin CRUD;
+  `list({includeInactive})` toggles `?include_inactive=true`),
+  `products.search`, `catalog.sync`,
+  `settings.{getSalesDrive,saveSalesDrive,testSalesDrive}` (the SalesDrive
+  Settings API), `mappings.{list,create,update,remove}` (admin mappings mgmt;
+  `list({supplier,q})`), `receipts.{create,get,uploadPhoto,recognize,generateXlsx}`,
+  `lines.{patch,map}`, and `authApi.{login,pin,refresh,me,setPin}`. File uploads use
   `api.postForm` (multipart `FormData`, no JSON `Content-Type`).
 - `src/lib/auth.tsx` — `AuthProvider` with `login` / `pin` / `logout` (refresh
   token note: Capacitor Secure Storage).
@@ -135,7 +143,11 @@ Two integration modules under `backend/integrations/`:
   `Sheet` (Radix Dialog bottom-sheet), `Spinner`, `Skeleton`, `EmptyState`,
   `Toast`/`Toaster`/`useToast`, `StatusBadge` (status via icon + text, not colour
   alone — WCAG); each with a `*.stories.tsx`. `MappingSheet` (debounced
-  `products.search` → `lines.map`, optimistic update) builds on `Sheet`.
+  `products.search` → `lines.map`, optimistic update) builds on `Sheet` and stays
+  the receipt-flow mapper. The Settings UI adds two more bottom sheets:
+  `SupplierFormSheet` (the add/edit supplier form) and `ProductPickerSheet` (a
+  reusable product-search picker adapted from `MappingSheet`, used to re-target a
+  mapping).
 - `src/styles/tokens.css` — light `:root` tokens + `[data-theme='dark']` overrides
   + `--surface-glass*` / `--glass-*` "Liquid Glass 2026" tokens.
 - PWA via `vite-plugin-pwa` (`vite.config.ts`, `public/manifest.webmanifest`),
@@ -156,9 +168,12 @@ The end-to-end path, with the exact endpoints (all non-auth endpoints require
    gate `/admin` and `has_pin` to offer the PIN flow); a user sets their own PIN
    with `POST /api/auth/set-pin/` (hashed via `make_password`, returns `204`).
 
-2. **Pick a supplier.** `GET /api/suppliers/` lists active suppliers. The chosen
-   supplier scopes all subsequent SKU mapping (each supplier has its own SKU
-   namespace). Tapping a supplier creates the draft and navigates to the camera.
+2. **Pick a supplier.** `GET /api/suppliers/` lists active suppliers (the
+   operator picker). The chosen supplier scopes all subsequent SKU mapping (each
+   supplier has its own SKU namespace). Tapping a supplier creates the draft and
+   navigates to the camera. Suppliers are managed by admins from the Settings UI
+   (see the [admin settings management](#admin-settings-management-supporting-flow)
+   flow); the picker only ever shows `is_active=True` rows.
 
 3. **Create draft, then photograph.** `POST /api/receipts/` (`ReceiptCreateView`,
    body `{supplier: id}`) creates a `Receipt` (status `draft`) stamped with
@@ -237,7 +252,54 @@ Celery task `sync_catalog_task` (`backend/apps/catalog/tasks.py`). It runs:
   same service synchronously and prints the count (handy for first provisioning,
   cron, or debugging);
 - **daily** — Celery beat (`sync-salesdrive-catalog-daily` at 03:00), which calls
-  the task with no argument so it falls back to `settings.SALESDRIVE_YML_URL`.
+  the task with no argument so it resolves the URL from the DB
+  (`IntegrationSettings`) and then `settings.SALESDRIVE_YML_URL`.
+
+### Admin settings management (supporting flow)
+
+The `/admin` «Налаштування» page (`frontend/src/pages/AdminPage.tsx`, admin-gated
+via `GET /api/auth/me/`) is where an admin configures the system through the
+designed PWA instead of Django admin. It has three sections, each backed by
+admin-only endpoints (`IsAuthenticated` + `IsAdmin`):
+
+- **SalesDrive** — read/update the DB-stored YML URL and probe it without saving:
+  - `GET /api/settings/salesdrive/` → `{salesdrive_yml_url, last_synced, product_count}`
+    (`SalesDriveSettingsView.get`, `apps.catalog.views`);
+  - `PUT /api/settings/salesdrive/` `{salesdrive_yml_url}` → saves onto the
+    `IntegrationSettings` singleton and returns the same read shape;
+  - `POST /api/settings/salesdrive/test/` `{salesdrive_yml_url?}` → a non-throwing
+    "test connection" probe returning `{ok, product_count, error}` with **HTTP 200**
+    even on failure (`probe_catalog_yml` performs no DB write — see
+    [`docs/INTEGRATIONS.md` §1.4](./INTEGRATIONS.md#14-db-configurable-yml-url-the-settings-api));
+  - the existing `POST /api/sync/catalog/` for the «Синхронізувати» button.
+
+- **Постачальники** — full supplier CRUD via the DRF `DefaultRouter`-mounted
+  `SupplierViewSet` (`apps.suppliers`):
+  - `GET /api/suppliers/` (operators + admins; `?include_inactive=true` for the
+    admin screen so deactivated vendors are visible), `POST /api/suppliers/`
+    (admin), `GET/PUT/PATCH/DELETE /api/suppliers/{id}/` (admin). `list`/`retrieve`
+    require only `IsAuthenticated`; mutations require `IsAdmin`.
+  - `DELETE` returns **409 Conflict** with a Ukrainian
+    "deactivate instead" message when the supplier is referenced by a receipt
+    (`Receipt.supplier` is `on_delete=PROTECT`), so the audit trail is preserved.
+
+- **Маппінги** — admin management of remembered `ArticleMapping` rows via the
+  `DefaultRouter`-mounted `ArticleMappingViewSet` (`apps.mapping`), all admin-only:
+  - `GET /api/mappings/` (filters `?supplier=<id>`, `?q=<text>` over supplier SKU /
+    product SKU / product name; `select_related` supplier + product; ordered by
+    `-times_used`; capped at 200),
+  - `POST /api/mappings/` (create / re-target; normalizes the SKU and
+    `update_or_create`s on the unique `(supplier, supplier_sku_normalized)` pair;
+    **does not** touch `times_used` — admin curation is not a "use"),
+  - `PATCH /api/mappings/{id}/` (re-target the product and/or re-normalize the SKU;
+    a colliding SKU surfaces as a clean 409),
+  - `DELETE /api/mappings/{id}/` (forget the auto-match; never cascades into
+    receipts, which reference the product directly).
+
+  This is distinct from the receipt-flow line-map action
+  `POST /api/receipts/{id}/lines/{line_id}/map/` (which calls `remember_mapping`
+  and **does** bump `times_used`); the admin API is curation of the "memory",
+  independent of any receipt.
 
 ---
 

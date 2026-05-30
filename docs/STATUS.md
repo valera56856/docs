@@ -24,6 +24,34 @@
 | 11 | Генерація Excel | ✅ 4 колонки, групування дублів + середньозважена ціна; інструкція імпорту |
 | 12 | Workflow статусів | ✅ `recompute_receipt_status` (draft→recognizing→needs_mapping/ready→xlsx_ready, error) |
 | 13 | Деплой | ✅ `docker-compose.prod.yml`, `entrypoint.sh`, whitenoise, gunicorn, split beat |
+| 14 | Адмін-екран «Налаштування» (PWA) | ✅ SalesDrive (DB-URL + тест + синк), CRUD постачальників, керування маппінгами — все через дизайнерський PWA `/admin`, не Django admin |
+
+### Story 14 — деталі (delta поверх MVP)
+
+Адмін керує системою через дизайнерський екран `/admin` («Налаштування»,
+`frontend/src/pages/AdminPage.tsx`, гейт за роллю через `GET /api/auth/me/`), а не
+через Django admin. Три секції, усі ендпоінти `IsAuthenticated` + `IsAdmin`:
+
+- **SalesDrive** — YML-URL тепер у БД (`IntegrationSettings` singleton, pk=1),
+  env-змінна `SALESDRIVE_YML_URL` лишається фолбеком. `GET/PUT
+  /api/settings/salesdrive/` (`{salesdrive_yml_url, last_synced, product_count}`),
+  `POST /api/settings/salesdrive/test/` — «перевірка підключення» через
+  `probe_catalog_yml` (без запису в БД), завжди **HTTP 200** навіть на помилці
+  (`{ok, product_count, error}`). Кнопка «Синхронізувати» = наявний
+  `POST /api/sync/catalog/`.
+- **Постачальники** — повний CRUD через `SupplierViewSet` (DRF `DefaultRouter`):
+  `GET/POST /api/suppliers/`, `GET/PUT/PATCH/DELETE /api/suppliers/{id}/`. Оператор
+  читає лише активних; мутації — лише адмін. `DELETE` дає **409** із підказкою
+  «деактивуйте» коли є повʼязані накладні (`Receipt.supplier=PROTECT`).
+- **Маппінги** — керування `ArticleMapping` через `ArticleMappingViewSet`:
+  `GET /api/mappings/` (фільтри `?supplier`, `?q`; `-times_used`; cap 200), `POST`
+  (створення/перепривʼязка, **не** інкрементує `times_used`), `PATCH /{id}/`
+  (перепривʼязка товару / зміна sku, колізія → 409), `DELETE /{id}/`.
+
+Нові фронтенд-компоненти: `SupplierFormSheet`, `ProductPickerSheet` (адаптовано з
+`MappingSheet`, який лишається для флоу накладної). `SuppliersPage` має шестірню
+«Налаштування» в шапці (тільки для адміна). Деталі — у
+[ARCHITECTURE.md](ARCHITECTURE.md) та [INTEGRATIONS.md](INTEGRATIONS.md) §1.4.
 
 ## Верифікація (перевірено, не на словах)
 
@@ -50,7 +78,7 @@ cd ../frontend && npm install && npm run build
 ## Що далі
 
 ### 0. Блок перед продом (потребує доступів/рішень бізнесу)
-1. **Реальні креди** у `.env.prod` (з `.env.prod.example`): `SECRET_KEY`, `GEMINI_API_KEY`, `SALESDRIVE_YML_URL`, `R2_*`, `POSTGRES_*`.
+1. **Реальні креди** у `.env.prod` (з `.env.prod.example`): `SECRET_KEY`, `GEMINI_API_KEY`, `R2_*`, `POSTGRES_*`. `SALESDRIVE_YML_URL` тепер опційний фолбек — основне джерело URL задається в адмін-екрані «Налаштування» (`PUT /api/settings/salesdrive/`, зберігається в `IntegrationSettings`).
 2. **Звірити шаблон Excel** надходження в кабінеті SalesDrive (`Склад → Надходження → Імпорт → завантажити шаблон`) із колонками генератора (`apps/receipts/services/xlsx.py`, `COLUMN_HEADERS`). Поточні: `SKU/Артикул, Назва, Кількість, Ціна (собівартість)`.
 3. **Рішення по ціні дублів** (ТЗ §16): зараз середньозважена; підтвердити чи змінити на last/min.
 

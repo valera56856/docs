@@ -147,3 +147,77 @@ export interface LinePatch {
   /** Corrected product name as recognized from the invoice. */
   recognized_name?: string;
 }
+
+/**
+ * DB-configurable SalesDrive integration settings.
+ *
+ * Read shape of `GET/PUT /api/settings/salesdrive/`. The YML URL is the single
+ * source the catalog sync pulls from (the `SALESDRIVE_YML_URL` env var is only a
+ * fallback). `last_synced` / `product_count` summarize the current catalog cache
+ * so the admin sees whether a sync has ever run and how many products are cached.
+ */
+export interface SalesDriveSettings {
+  /** The SalesDrive YML catalog export URL (may be blank if never configured). */
+  salesdrive_yml_url: string;
+  /** ISO timestamp of the most recent `OurProduct.last_synced`, or null. */
+  last_synced: string | null;
+  /** Number of catalog products currently cached. */
+  product_count: number;
+}
+
+/**
+ * Result of `POST /api/settings/salesdrive/test/` — a non-throwing probe.
+ *
+ * The endpoint always responds 200; transport/parse failures arrive as
+ * `{ ok: false, error }` rather than an HTTP error, so the UI can show a friendly
+ * message without try/catch around the success path.
+ */
+export interface SalesDriveTestResult {
+  /** True when the YML was fetched + parsed successfully. */
+  ok: boolean;
+  /** Parsed product count when `ok`, otherwise null. */
+  product_count: number | null;
+  /** Human-readable failure reason when not `ok`, otherwise null. */
+  error: string | null;
+}
+
+/**
+ * Write payload for creating/updating a {@link Supplier} from the admin UI.
+ *
+ * Mirrors the writable `SupplierSerializer` fields (`id` / `created_at` are
+ * read-only server-side). Used for both create (`POST /api/suppliers/`) and
+ * partial update (`PATCH /api/suppliers/{id}/`).
+ */
+export interface SupplierInput {
+  /** Display name of the supplier. */
+  name: string;
+  /** Free-form note (e.g. invoice quirks); may be empty. */
+  note: string;
+  /** Whether the supplier is selectable by operators. */
+  is_active: boolean;
+}
+
+/**
+ * A remembered article mapping as served by the admin list/CRUD endpoints
+ * (`GET/POST/PATCH/DELETE /api/mappings/`).
+ *
+ * Distinct from {@link ArticleMapping} (the receipt-flow shape with numeric
+ * `supplier`): here `supplier` and `our_product` are nested summaries so the
+ * admin table can render names without a second lookup. `our_product` is
+ * nullable defensively, though every persisted mapping points at a product.
+ */
+export interface MappingAdmin {
+  id: number;
+  /** Owning supplier summary. */
+  supplier: { id: number; name: string };
+  /** The supplier's SKU as remembered (pre-normalization display form). */
+  supplier_sku: string;
+  /** The mapped catalog product summary, or null if detached. */
+  our_product: { id: number; sku: string; name: string } | null;
+  /** How many times this mapping has been auto-applied. */
+  times_used: number;
+  /** Identifier (email/username) of whoever first created the mapping. */
+  created_by: string;
+  /** ISO creation timestamp. */
+  created_at: string;
+}

@@ -51,10 +51,10 @@ valeraup/
 │   │   ├── accounts/          ← Profile (role, pin_hash); auth (login/refresh/pin/me/set-pin)
 │   │   │   ├── signals.py     ← post_save → auto Profile(role='operator')
 │   │   │   └── permissions.py ← IsAdmin / IsOperatorOrAdmin (keyed on profile.role)
-│   │   ├── suppliers/         ← Supplier
-│   │   ├── catalog/           ← OurProduct + services.sync_catalog + tasks
+│   │   ├── suppliers/         ← Supplier; SupplierViewSet (DRF router; operators read, admins mutate)
+│   │   ├── catalog/           ← OurProduct + IntegrationSettings (singleton) + services.sync_catalog/probe_catalog_yml + tasks
 │   │   │   └── management/commands/sync_catalog.py ← CLI catalog sync
-│   │   ├── mapping/           ← ArticleMapping + services (normalize/match/remember)
+│   │   ├── mapping/           ← ArticleMapping + services (normalize/match/remember) + ArticleMappingViewSet (/api/mappings/ admin CRUD)
 │   │   └── receipts/          ← Receipt/ReceiptPhoto(image+image_url)/ReceiptLine
 │   │       ├── services/xlsx.py   ← build_receipt_xlsx (4 cols, group + weighted price)
 │   │       ├── services/status.py ← recompute_receipt_status / set_receipt_status
@@ -76,8 +76,10 @@ valeraup/
         │   ├── ThemeProvider.tsx  ← theme context + ThemeToggle (Sun/Moon)
         │   ├── ui/            ← Button, Input, Card, Sheet, Spinner, Skeleton, EmptyState,
         │   │                     Toast/Toaster/useToast, StatusBadge (+ *.stories.tsx)
-        │   └── MappingSheet.tsx   ← bottom-sheet (Radix Dialog) for manual mapping
-        └── pages/             ← Login, Suppliers, Camera, ReceiptTable, Generate, Admin
+        │   ├── MappingSheet.tsx   ← bottom-sheet (Radix Dialog) for manual mapping (receipt flow)
+        │   ├── SupplierFormSheet.tsx  ← add/edit supplier form sheet (Settings UI)
+        │   └── ProductPickerSheet.tsx ← reusable product-search picker (re-target a mapping)
+        └── pages/             ← Login, Suppliers, Camera, ReceiptTable, Generate, Admin (Admin = «Налаштування» hub)
 ```
 
 **Important structural facts that the code already depends on:**
@@ -168,6 +170,38 @@ These are already followed throughout `backend/` — match the existing style.
 - **`OurProduct.salesdrive_id` is the upsert key** for catalog sync;
   `ArticleMapping` is unique on `(supplier, supplier_sku_normalized)`. Respect
   those constraints rather than working around them.
+- **`IntegrationSettings` is a DB singleton** (`apps/catalog/models.py`). It holds
+  the admin-editable `salesdrive_yml_url`. `save()` pins `self.pk = 1`; read it via
+  the `IntegrationSettings.load()` classmethod (`get_or_create(pk=1)`). The catalog
+  YML URL is resolved in this order: explicit argument → `IntegrationSettings`
+  (DB) → `settings.SALESDRIVE_YML_URL` (env fallback) — see `sync_catalog`. When
+  you need config that an admin must change without a redeploy, extend this row
+  rather than adding ad-hoc settings; the editing surface is the **Settings PWA**
+  (`GET/PUT /api/settings/salesdrive/`), Django admin is secondary (add/delete
+  disabled). `probe_catalog_yml(url)` is the **read-only** counterpart used by
+  `POST /api/settings/salesdrive/test/` — it fetches + parses but never writes,
+  and the test view always returns **HTTP 200** (a bad URL is a *result*, not a
+  500), shaped `{ok, product_count, error}`.
+- **Admin-editable directories are DRF `ModelViewSet`s + `DefaultRouter`, not
+  Django admin.** Two such surfaces exist; both gate writes behind `IsAdmin` while
+  keeping reads available where the operator flow needs them:
+  - `SupplierViewSet` (`apps/suppliers`) → `GET/POST /api/suppliers/`,
+    `GET/PUT/PATCH/DELETE /api/suppliers/{id}/`. `get_permissions()` grants
+    `list`/`retrieve` to any authenticated user (operators pick a vendor) and
+    requires `IsAdmin` for mutations. `list` returns active-only unless
+    `?include_inactive=true`. `destroy()` catches `ProtectedError`
+    (`Receipt.supplier=PROTECT`) and returns **409** with a "deactivate instead"
+    message — never hard-delete a supplier with receipts; deactivate
+    (`is_active=False`) to preserve the audit trail.
+  - `ArticleMappingViewSet` (`apps/mapping`) → `GET/POST /api/mappings/`,
+    `PATCH/DELETE /api/mappings/{id}/`, **all** `IsAdmin`. This is curation of the
+    learned "memory", separate from the receipt-flow line-map action
+    (`POST /api/receipts/{id}/lines/{id}/map/`, which calls `remember_mapping`).
+    **The admin API must not bump `times_used`** (curation is not a "use"): it
+    writes the normalized SKU via `update_or_create` on
+    `(supplier, supplier_sku_normalized)` directly, and preserves `created_by` on
+    re-target. `list` filters on `?supplier`/`?q`, `select_related`s supplier +
+    product, orders by `-times_used`, and caps at 200.
 - **Media goes through `default_storage`.** `ReceiptPhoto.image`
   (`ImageField(upload_to='receipts/%Y/%m/')`) saves the uploaded file via Django's
   default storage — Cloudflare R2 when the `R2_*` env vars are set, else

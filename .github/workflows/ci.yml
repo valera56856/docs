@@ -89,6 +89,11 @@ jobs:
       - name: Django system check
         run: python manage.py check
 
+      - name: Migrations are up to date
+        # Fails if a model change has no committed migration (manage.py check
+        # does NOT catch this — a missing migration only blows up at runtime/pytest).
+        run: python manage.py makemigrations --check --dry-run
+
       - name: Run tests
         run: pytest -q
 
