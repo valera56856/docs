@@ -101,6 +101,20 @@ def product(db) -> OurProduct:
     )
 
 
+@pytest.fixture
+def other_product(db) -> OurProduct:
+    """Return a second catalog product to test mapping corrections.
+
+    Used by the "operator correction" case where a SKU is re-mapped from one
+    product to another.
+    """
+    return OurProduct.objects.create(
+        salesdrive_id="SD-2002",
+        sku="OUR-2002",
+        name="Штани сині",
+    )
+
+
 # ---------------------------------------------------------------------------
 # match_line — lookup before/after a mapping exists
 # ---------------------------------------------------------------------------
@@ -222,3 +236,90 @@ def test_remember_mapping_is_idempotent_and_increments_use(
 
     second.refresh_from_db()
     assert second.times_used >= 2
+
+
+@pytest.mark.django_db
+def test_remember_mapping_handles_cyrillic_sku(
+    supplier: Supplier, product: OurProduct
+) -> None:
+    """A Cyrillic supplier SKU normalizes and auto-matches round-trip.
+
+    Ukrainian supplier catalogs use Cyrillic article codes (``арт-1``). The stored
+    normalized key must upper-case the Cyrillic letters so a later OCR read of
+    ``"  АРТ-1 "`` (different case + whitespace) still auto-matches.
+    """
+    mapping = remember_mapping(supplier.id, "арт-1", product.id)
+
+    assert mapping.supplier_sku_normalized == normalize_sku("арт-1") == "АРТ-1"
+
+    product_result, status = match_line(supplier.id, "  Арт-1 ")
+    assert product_result is not None
+    assert product_result.id == product.id
+    assert status == "auto"
+
+
+@pytest.mark.django_db
+def test_remember_mapping_is_isolated_per_supplier(
+    supplier: Supplier, product: OurProduct, other_product: OurProduct
+) -> None:
+    """The same SKU can map to different products for different suppliers.
+
+    SKU namespaces are per-supplier, so remembering ``"SKU-1"→product`` for one
+    supplier and ``"SKU-1"→other_product`` for another must create two distinct
+    mappings, each resolving correctly within its own supplier.
+    """
+    other_supplier = Supplier.objects.create(name="Інший Постачальник")
+
+    remember_mapping(supplier.id, "SKU-1", product.id)
+    remember_mapping(other_supplier.id, "SKU-1", other_product.id)
+
+    assert ArticleMapping.objects.count() == 2
+
+    first, _ = match_line(supplier.id, "SKU-1")
+    second, _ = match_line(other_supplier.id, "SKU-1")
+    assert first.id == product.id
+    assert second.id == other_product.id
+
+
+@pytest.mark.django_db
+def test_remember_mapping_correction_retargets_product(
+    supplier: Supplier, product: OurProduct, other_product: OurProduct
+) -> None:
+    """Re-mapping an existing SKU re-targets the product (operator correction).
+
+    When an operator realizes a SKU was mapped to the wrong product, re-calling
+    ``remember_mapping`` with the same SKU but a new product must update the
+    existing row in place (no duplicate) and point auto-match at the corrected
+    product, while still bumping ``times_used``.
+    """
+    first = remember_mapping(supplier.id, "SKU-9", product.id, created_by="op-1")
+    corrected = remember_mapping(
+        supplier.id, "SKU-9", other_product.id, created_by="op-2"
+    )
+
+    assert ArticleMapping.objects.count() == 1
+    assert corrected.id == first.id
+    assert corrected.our_product_id == other_product.id
+    assert corrected.times_used >= 2
+
+    matched, status = match_line(supplier.id, "SKU-9")
+    assert matched.id == other_product.id
+    assert status == "auto"
+
+
+@pytest.mark.django_db
+def test_remember_mapping_preserves_original_created_by(
+    supplier: Supplier, product: OurProduct, other_product: OurProduct
+) -> None:
+    """A correction never overwrites the original ``created_by``.
+
+    ``created_by`` records who *first* authored the mapping for audit; later
+    confirmations or corrections (possibly by a different operator) must leave it
+    untouched.
+    """
+    remember_mapping(supplier.id, "SKU-9", product.id, created_by="original-op")
+    corrected = remember_mapping(
+        supplier.id, "SKU-9", other_product.id, created_by="different-op"
+    )
+
+    assert corrected.created_by == "original-op"

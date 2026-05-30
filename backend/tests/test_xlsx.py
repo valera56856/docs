@@ -171,3 +171,111 @@ def test_build_receipt_xlsx_writes_one_row_per_line(
         if sheet.cell(row=row, column=1).value not in (None, "")
     ]
     assert len(populated) == line_count
+
+
+# ---------------------------------------------------------------------------
+# Duplicate grouping: same product across multiple lines → one summed row
+# ---------------------------------------------------------------------------
+def _data_rows(sheet) -> list[list]:
+    """Return all non-header data rows (rows with a SKU in column 1).
+
+    Args:
+        sheet: An openpyxl worksheet from :func:`_open`.
+
+    Returns:
+        A list of ``[sku, name, qty, price]`` row value lists.
+    """
+    rows: list[list] = []
+    for row in range(2, sheet.max_row + 1):
+        sku = sheet.cell(row=row, column=1).value
+        if sku in (None, ""):
+            continue
+        rows.append([sheet.cell(row=row, column=col).value for col in range(1, 5)])
+    return rows
+
+
+@pytest.fixture
+def receipt_duplicate_lines(db) -> Receipt:
+    """Build a receipt where two lines map to the SAME product.
+
+    Line 1: qty 2 @ 100.00; Line 2: qty 3 @ 50.00 — both → ``OUR-1``. A third
+    line maps to a different product so we can prove only the duplicates merge.
+
+    Returns:
+        Receipt: A persisted receipt with three lines (two sharing a product).
+    """
+    supplier = Supplier.objects.create(name="ACME Постачання")
+    receipt = Receipt.objects.create(supplier=supplier, status="ready")
+
+    product_a = OurProduct.objects.create(
+        salesdrive_id="SD-1", sku="OUR-1", name="Сорочка біла"
+    )
+    product_b = OurProduct.objects.create(
+        salesdrive_id="SD-2", sku="OUR-2", name="Штани чорні"
+    )
+
+    ReceiptLine.objects.create(
+        receipt=receipt,
+        recognized_sku="SUP-A1",
+        quantity=Decimal("2.000"),
+        price=Decimal("100.00"),
+        matched_product=product_a,
+        match_status="auto",
+    )
+    ReceiptLine.objects.create(
+        receipt=receipt,
+        recognized_sku="SUP-A2",
+        quantity=Decimal("3.000"),
+        price=Decimal("50.00"),
+        matched_product=product_a,
+        match_status="manual",
+    )
+    ReceiptLine.objects.create(
+        receipt=receipt,
+        recognized_sku="SUP-B",
+        quantity=Decimal("1.000"),
+        price=Decimal("899.00"),
+        matched_product=product_b,
+        match_status="auto",
+    )
+    return receipt
+
+
+@pytest.mark.django_db
+def test_duplicate_lines_collapse_to_one_row(
+    receipt_duplicate_lines: Receipt,
+) -> None:
+    """Two lines on the same product produce ONE merged row (plus the other)."""
+    sheet = _open(build_receipt_xlsx(receipt_duplicate_lines))
+    rows = _data_rows(sheet)
+
+    # Three input lines, but two share a product → two output rows.
+    assert len(rows) == 2
+    skus = {row[0] for row in rows}
+    assert skus == {"OUR-1", "OUR-2"}
+
+
+@pytest.mark.django_db
+def test_duplicate_lines_sum_quantity(receipt_duplicate_lines: Receipt) -> None:
+    """The merged row's quantity is the SUM of the duplicates (2 + 3 = 5)."""
+    sheet = _open(build_receipt_xlsx(receipt_duplicate_lines))
+    merged = next(row for row in _data_rows(sheet) if row[0] == "OUR-1")
+
+    assert Decimal(str(merged[2])) == Decimal("5.000")
+
+
+@pytest.mark.django_db
+def test_duplicate_lines_weighted_average_price(
+    receipt_duplicate_lines: Receipt,
+) -> None:
+    """The merged price is the quantity-weighted average.
+
+    ``Σ(qty·price) / Σ(qty) = (2·100 + 3·50) / (2 + 3) = 350 / 5 = 70.00``.
+    This preserves the total cost (350.00) through the merge.
+    """
+    sheet = _open(build_receipt_xlsx(receipt_duplicate_lines))
+    merged = next(row for row in _data_rows(sheet) if row[0] == "OUR-1")
+
+    assert Decimal(str(merged[3])) == Decimal("70.00")
+    # Total cost is preserved: 5 units × 70.00 = 350.00 = 2×100 + 3×50.
+    assert Decimal(str(merged[2])) * Decimal(str(merged[3])) == Decimal("350.000")

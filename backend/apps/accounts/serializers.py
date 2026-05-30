@@ -115,6 +115,26 @@ class PinLoginSerializer(serializers.Serializer):
     )
 
 
+class SetPinSerializer(serializers.Serializer):
+    """Validate a request to set/replace the caller's 4-digit PIN.
+
+    Only the PIN itself is supplied — the account is taken from the authenticated
+    request, so an operator can only set *their own* PIN. The PIN is validated for
+    shape here (exactly 4 digits) and hashed in the view; it is never echoed back
+    or logged.
+
+    Attributes:
+        pin: The new 4-digit PIN. ``write_only`` so it can never appear in a
+            serialized response.
+    """
+
+    pin = serializers.RegexField(
+        r"^\d{4}$",
+        write_only=True,
+        error_messages={"invalid": "PIN має складатися з 4 цифр."},
+    )
+
+
 class TokenPairSerializer(serializers.Serializer):
     """Response schema for a successful login: an access + refresh JWT pair.
 

@@ -81,7 +81,7 @@ def sync_catalog(yml_url: str) -> int:
         extra={
             "url": resolved_url,
             "synced": synced,
-            "created": created,
+            "created_count": created,
             "updated": synced - created,
         },
     )

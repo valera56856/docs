@@ -187,7 +187,7 @@ def remember_mapping(
             "normalized_sku": normalized,
             "our_product_id": our_product_id,
             "mapping_id": mapping.pk,
-            "created": created,
+            "was_created": created,
             "times_used": mapping.times_used,
         },
     )

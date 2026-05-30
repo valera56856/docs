@@ -28,24 +28,34 @@
 ## Архітектура коротко
 
 ```
-Фото накладної (PWA / Capacitor camera)
-        │  POST /api/receipts/  →  POST /api/receipts/{id}/recognize/
-        ▼
-Celery task  ──►  Gemini 2.5 Flash Vision  ──►  ReceiptLine[] (артикул, назва, к-сть, ціна)
+Постачальники (GET /api/suppliers/)  →  тап створює чернетку (POST /api/receipts/)
         │
+        ▼
+Камера: фото сторінок накладної  →  POST /api/receipts/{id}/photos/ (multipart 'image')
+        │                            файл лягає в default storage (R2 / MEDIA_ROOT),
+        │                            image_url ← image.url
+        ▼
+POST /api/receipts/{id}/recognize/  →  202  →  Celery task
+        │
+        ▼
+Celery task читає байти фото з storage (photo.image.open) ──► Gemini 2.5 Flash Vision
+        │                                                     ──► ReceiptLine[] (артикул, назва, к-сть, ціна)
         ▼
 Маппінг: ArticleMapping (supplier, normalized SKU) → OurProduct
-   • auto  — маппінг уже існує
-   • unmapped — оператор обирає товар вручну (запам'ятовується, times_used++)
-        │
+   • auto  — маппінг уже існує (times_used++)
+   • unmapped — оператор обирає товар вручну (POST .../lines/{id}/map/, запам'ятовується)
+        │  кожне map/patch → recompute_receipt_status() → needs_mapping | ready
         ▼
-POST /api/receipts/{id}/generate-xlsx/  ──►  openpyxl  ──►  xlsx_url (Cloudflare R2)
-        │
+POST /api/receipts/{id}/generate-xlsx/  ──►  openpyxl (групування за товаром,
+        │                                     сума к-сті, зважена середня ціна)
+        │                                     ──►  bytes → default storage → xlsx_url
         ▼
 Ручний імпорт у SalesDrive: Склад → Надходження → Імпорт
 ```
 
-Каталог SalesDrive кешується локально (`OurProduct`) із YML-фіда — синхронізація запускається вручну (`POST /api/sync/catalog/`, лише адмін) і щодня через Celery beat.
+Каталог SalesDrive кешується локально (`OurProduct`) із YML-фіда — синхронізація запускається вручну (`POST /api/sync/catalog/`, лише адмін через `IsAdmin`), із CLI (`python manage.py sync_catalog`) і щодня через Celery beat.
+
+PWA працює зі світлою/темною темою (`ThemeProvider`, токени `[data-theme='dark']`, перемикач у хедері), із дизайн-системою NextCRM та «Liquid Glass 2026» поверхнями карток.
 
 Детальніше — у [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (Mermaid-діаграми потоку даних і станів `Receipt`).
 
@@ -53,11 +63,11 @@ POST /api/receipts/{id}/generate-xlsx/  ──►  openpyxl  ──►  xlsx_url
 
 ## Стек
 
-**Backend:** Django (>=5.1,<5.2) + Django REST Framework · DRF SimpleJWT · Celery + Redis · PostgreSQL · openpyxl · drf-spectacular (OpenAPI/Swagger) · Cloudflare R2 (S3-сумісне сховище через django-storages) · Gemini 2.5 Flash через google-genai SDK · структуроване JSON-логування.
+**Backend:** Django (>=5.1,<5.2) + Django REST Framework · DRF SimpleJWT · Celery + Redis · PostgreSQL · openpyxl · Pillow (ImageField) · drf-spectacular (OpenAPI/Swagger) · Cloudflare R2 (S3-сумісне сховище через django-storages) · Gemini 2.5 Flash через google-genai SDK · WhiteNoise + gunicorn (прод) · структуроване JSON-логування.
 
-**Frontend:** React 19 + Vite + TypeScript (PWA через `vite-plugin-pwa`) + Capacitor · lucide-react · кнопка на CVA + Radix Slot · Storybook · дизайн-токени NextCRM (navy → electric blue → cyan, шрифт Inter).
+**Frontend:** React 19 + Vite + TypeScript (PWA через `vite-plugin-pwa`) + Capacitor · lucide-react · UI-кіт на CVA + Radix (`Button`, `Input`, `Card`, `Sheet`, `Spinner`, `Skeleton`, `EmptyState`, `Toast`, `StatusBadge`) · світла/темна тема (`ThemeProvider`) · Storybook · дизайн-токени NextCRM (navy → electric blue → cyan, шрифт Inter).
 
-**Хостинг:** Hetzner + Docker Compose.
+**Хостинг:** Hetzner + Docker Compose (dev `docker-compose.yml` · прод `docker-compose.prod.yml`).
 
 ---
 
@@ -67,7 +77,9 @@ POST /api/receipts/{id}/generate-xlsx/  ──►  openpyxl  ──►  xlsx_url
 valeraup/
 ├── README.md                    ← цей файл
 ├── CLAUDE.md                    ← інженерні стандарти (docstrings, WHY, DoD, логування)
-├── docker-compose.yml           ← 5 сервісів: db, redis, backend, worker, frontend
+├── docker-compose.yml           ← DEV: 5 сервісів (db, redis, backend, worker+beat -B, frontend)
+├── docker-compose.prod.yml      ← ПРОД: db, redis, backend(gunicorn), worker, beat (окремо), frontend(nginx)
+├── .env.prod.example            ← приклад прод-оточення (НЕ комітити .env.prod)
 ├── .dockerignore  .gitignore
 ├── .github/workflows/ci.yml     ← CI: backend (check + pytest) і frontend (tsc + build)
 │
@@ -78,39 +90,48 @@ valeraup/
 │
 ├── backend/
 │   ├── manage.py                ← DJANGO_SETTINGS_MODULE=valeraup.settings
-│   ├── requirements.txt         ← закріплені версії (контракт ТЗ v2.2)
+│   ├── requirements.txt         ← закріплені версії (+ Pillow, whitenoise)
 │   ├── pytest.ini  conftest.py
-│   ├── Dockerfile  .env.example
+│   ├── Dockerfile               ← python:3.12-slim, CMD = entrypoint.sh
+│   ├── entrypoint.sh            ← прод: migrate → collectstatic → exec gunicorn
+│   ├── .env.example
 │   ├── valeraup/                ← пакет проєкту
 │   │   ├── settings.py  urls.py  celery.py  __init__.py  wsgi.py  asgi.py
 │   ├── apps/
-│   │   ├── accounts/            ← Profile (роль, pin_hash), auth (login / refresh / pin)
+│   │   ├── accounts/            ← Profile (роль, pin_hash); auth (login/refresh/pin/me/set-pin)
+│   │   │   ├── signals.py       ← post_save → авто-Profile (operator)
+│   │   │   └── permissions.py   ← IsAdmin / IsOperatorOrAdmin (за profile.role)
 │   │   ├── suppliers/           ← Supplier
 │   │   ├── catalog/             ← OurProduct (кеш SalesDrive) + services/tasks (YML sync)
+│   │   │   └── management/commands/sync_catalog.py ← CLI-синхронізація каталогу
 │   │   ├── mapping/             ← ArticleMapping + services (normalize_sku, match_line, …)
-│   │   └── receipts/            ← Receipt / ReceiptPhoto / ReceiptLine
-│   │       ├── services/xlsx.py ← build_receipt_xlsx (4 колонки)
-│   │       └── tasks.py         ← recognize_receipt_task (Celery)
+│   │   └── receipts/            ← Receipt / ReceiptPhoto(image+image_url) / ReceiptLine
+│   │       ├── services/xlsx.py ← build_receipt_xlsx (4 колонки, групування+зважена ціна)
+│   │       ├── services/status.py ← recompute_receipt_status / set_receipt_status
+│   │       └── tasks.py         ← recognize_receipt_task (Celery, читає байти з storage)
 │   ├── integrations/
-│   │   ├── gemini.py            ← recognize_invoice() — Gemini Vision OCR
-│   │   └── salesdrive.py        ← fetch_catalog_yml() / parse_catalog_yml()
-│   └── tests/                   ← test_mapping / test_xlsx / test_models / test_api_smoke
+│   │   ├── gemini.py            ← recognize_invoice() — реальний google-genai виклик
+│   │   └── salesdrive.py        ← fetch_catalog_yml() / parse_catalog_yml() (namespace-tolerant)
+│   └── tests/                   ← test_accounts / test_catalog / test_mapping / test_receipts /
+│                                  test_upload / test_xlsx / test_models / test_api_smoke
 │
 └── frontend/
     ├── package.json  tsconfig.json  tsconfig.node.json
     ├── vite.config.ts           ← React + VitePWA (manifest Valeraup)
     ├── capacitor.config.ts      ← appId ua.nextcrm.valeraup
     ├── index.html  nginx.conf  Dockerfile  .env.example
-    ├── .storybook/              ← main.ts  preview.ts
+    ├── .storybook/              ← main.ts  preview.ts (тема light/dark у toolbar)
     ├── public/                  ← manifest.webmanifest  robots.txt  icons/
     └── src/
         ├── main.tsx  App.tsx  router.tsx  vite-env.d.ts
-        ├── styles/              ← tokens.css (палітра NextCRM)  global.css
-        ├── lib/                 ← cn.ts  api.ts (JWT fetch)  auth.tsx (AuthProvider)
-        ├── types/index.ts       ← Supplier, OurProduct, Receipt, ReceiptLine, MatchStatus
+        ├── styles/              ← tokens.css (light + [data-theme='dark'] + glass)  global.css
+        ├── lib/                 ← cn.ts  api.ts (JWT fetch + postForm)  auth.tsx  camera.ts  useTheme.ts
+        ├── types/index.ts       ← Supplier, OurProduct, Receipt, ReceiptLine, request/response shapes
         ├── components/
-        │   ├── ui/              ← Button (CVA + Slot) + .stories  StatusBadge
-        │   └── MappingSheet.tsx ← bottom-sheet для ручного маппінгу
+        │   ├── ThemeProvider.tsx ← тема + ThemeToggle (Sun/Moon)
+        │   ├── ui/              ← Button, Input, Card, Sheet, Spinner, Skeleton, EmptyState,
+        │   │                       Toast/Toaster/useToast, StatusBadge (+ .stories.tsx)
+        │   └── MappingSheet.tsx ← bottom-sheet (Radix Dialog) для ручного маппінгу
         └── pages/               ← Login, Suppliers, Camera, ReceiptTable, Generate, Admin
 ```
 
@@ -199,8 +220,10 @@ docker compose up --build
 
 - `db` (PostgreSQL 16) і `redis` (Redis 7) піднімаються з healthcheck'ами; `backend` чекає, поки вони стануть здоровими.
 - `backend` виконує `python manage.py migrate --noinput`, далі запускає dev-сервер на `0.0.0.0:8000`.
-- `worker` запускає Celery з вбудованим beat (`celery -A valeraup worker -B -l info`).
+- `worker` запускає Celery з вбудованим beat (`celery -A valeraup worker -B -l info`) — лише для dev.
 - `frontend` робить `npm install` і піднімає Vite на `0.0.0.0:5173`.
+
+> **Завантаження медіа:** фото накладної (`POST /api/receipts/{id}/photos/`) і згенеровані `.xlsx` зберігаються через Django default storage — у Cloudflare R2, якщо задані `R2_*`, інакше локально в `MEDIA_ROOT` (`backend/media/`). У DEBUG-режимі Django роздає `/media/` сам (`valeraup/urls.py`), тож прев'ю фото працює «з коробки» без R2. Celery-воркер читає байти фото назад зі storage (`photo.image.open()`), тому OCR не потребує публічного доступу до бакета.
 
 Доступні адреси:
 
@@ -214,26 +237,25 @@ docker compose up --build
 
 #### Ручні кроки після першого підняття
 
-Міграції застосовуються автоматично, але міграційні файли в репозиторій **не закомічені** (їх генерують через `makemigrations`). Першого разу згенеруйте та застосуйте їх, створіть суперкористувача й синхронізуйте каталог:
+Міграції **закомічені в репозиторій** (`apps/<x>/migrations/0001_initial.py`) і застосовуються автоматично (`migrate` на старті `backend`, а в проді — у `entrypoint.sh`), тож генерувати їх не треба. Після підняття створіть суперкористувача й синхронізуйте каталог:
 
 ```bash
-# Згенерувати міграції для всіх застосунків (за потреби — лише першого разу)
-docker compose exec backend python manage.py makemigrations \
-  accounts suppliers catalog mapping receipts
-
-# Застосувати міграції (також виконується автоматично при старті backend)
+# Застосувати міграції (вже закомічені; також виконується автоматично при старті backend)
 docker compose exec backend python manage.py migrate
 
-# Створити адміністратора для входу в /admin/ та видачі ролей
+# Створити адміністратора для входу в /admin/ та видачі ролей.
+# Сигнал post_save автоматично створює Profile(role='operator') для кожного User;
+# роль 'admin' проставляється вручну через Django admin.
 docker compose exec backend python manage.py createsuperuser
 
-# Підтягнути каталог SalesDrive у локальний кеш OurProduct
-#   (або через API: POST /api/sync/catalog/ під адмін-токеном)
-docker compose exec backend python manage.py shell -c \
-  "from apps.catalog.tasks import sync_catalog_task; print(sync_catalog_task())"
+# Підтягнути каталог SalesDrive у локальний кеш OurProduct — CLI-командою
+#   (або через API: POST /api/sync/catalog/ під адмін-токеном; або щодня Celery beat)
+docker compose exec backend python manage.py sync_catalog
 ```
 
-> **PIN-логін:** `Profile.pin_hash` зберігає хеш PIN. Задайте PIN оператору через Django admin або shell (`make_password`) — після цього стане доступним швидкий вхід `POST /api/auth/pin/`.
+> **PIN-логін:** найзручніше задати PIN самому через `POST /api/auth/set-pin/` (під access-токеном після входу email+пароль) — він захешує PIN у `Profile.pin_hash`. Альтернативно — через Django admin / shell (`make_password`). Після цього стає доступним швидкий вхід `POST /api/auth/pin/` (email + PIN).
+
+> **Міграції:** згенеровані міграції закомічені в репо, тож `entrypoint.sh` (`migrate`) піднімає схему в будь-якому свіжому контейнері без додаткових кроків. Після зміни моделей згенеруйте нову міграцію (`makemigrations`) і закомітьте її.
 
 ### Варіант B — без Docker (локальна розробка)
 
@@ -245,7 +267,6 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # .env має вказувати на ваші локальні Postgres/Redis
-python manage.py makemigrations accounts suppliers catalog mapping receipts
 python manage.py migrate
 python manage.py createsuperuser
 python manage.py runserver 0.0.0.0:8000
@@ -291,17 +312,20 @@ OpenAPI-схема генерується автоматично через **dr
 | `POST` | `/api/auth/login/` | Вхід email+пароль → JWT |
 | `POST` | `/api/auth/refresh/` | Оновлення access-токена |
 | `POST` | `/api/auth/pin/` | Швидкий вхід за 4-значним PIN → JWT |
-| `POST` | `/api/sync/catalog/` | Запуск синхронізації каталогу (лише адмін) |
+| `GET` | `/api/auth/me/` | Поточний користувач → `{email, role, has_pin}` |
+| `POST` | `/api/auth/set-pin/` | Встановити/змінити власний PIN → `204` |
+| `POST` | `/api/sync/catalog/` | Запуск синхронізації каталогу (лише `IsAdmin`) → `202` |
 | `GET` | `/api/suppliers/` | Список активних постачальників |
 | `GET` | `/api/products/search/?q=` | Пошук `OurProduct` за SKU/назвою |
-| `POST` | `/api/receipts/` | Створити чернетку накладної + фото |
+| `POST` | `/api/receipts/` | Створити чернетку накладної (`{supplier: id}`) |
+| `POST` | `/api/receipts/{id}/photos/` | Завантажити фото сторінки (multipart `image`) → `201 {id, image_url}` |
 | `POST` | `/api/receipts/{id}/recognize/` | Запустити Gemini OCR (Celery) → `202` |
-| `GET` | `/api/receipts/{id}/` | Накладна з позиціями та статусами |
-| `POST` | `/api/receipts/{id}/lines/{line_id}/map/` | Замаппити позицію на товар (запам'ятати) |
-| `PATCH` | `/api/receipts/{id}/lines/{line_id}/` | Редагувати кількість / ціну / SKU |
-| `POST` | `/api/receipts/{id}/generate-xlsx/` | Згенерувати Excel → `xlsx_url` |
+| `GET` | `/api/receipts/{id}/` | Накладна з фото, позиціями та статусами |
+| `POST` | `/api/receipts/{id}/lines/{line_id}/map/` | Замаппити позицію на товар (запам'ятати + recompute) |
+| `PATCH` | `/api/receipts/{id}/lines/{line_id}/` | Редагувати кількість / ціну / SKU (+ recompute) |
+| `POST` | `/api/receipts/{id}/generate-xlsx/` | Згенерувати Excel → `xlsx_url`, статус `xlsx_ready` |
 
-Статуси `Receipt`: `draft → recognizing → needs_mapping → ready → xlsx_ready` (+ `error`).
+Статуси `Receipt`: `draft → recognizing → needs_mapping → ready → xlsx_ready` (+ `error`). Перехід `needs_mapping → ready` тепер автоматичний: кожен map/patch викликає `recompute_receipt_status` (див. `apps/receipts/services/status.py`).
 
 ---
 
@@ -319,8 +343,12 @@ cd backend && pytest
 
 Покриття (Definition of Done):
 
-- `tests/test_mapping.py` — нормалізація SKU + авто-маппінг після `remember_mapping`.
-- `tests/test_xlsx.py` — `build_receipt_xlsx` формує 4 коректні колонки.
+- `tests/test_accounts.py` — авто-створення `Profile` на `User`; `set-pin` → PIN-логін round-trip; `me`; `IsAdmin` блокує оператора.
+- `tests/test_catalog.py` — парсинг невеликого YML; ідемпотентний upsert; пошук за sku/назвою.
+- `tests/test_mapping.py` — нормалізація SKU (вкл. кирилицю), per-supplier ізоляція, корекція; авто-маппінг після `remember_mapping`.
+- `tests/test_receipts.py` — створення чернетки; переходи `recompute_receipt_status`; PATCH рядка; map-флоу (`manual` + recompute).
+- `tests/test_upload.py` — завантаження фото створює `ReceiptPhoto` з `image`; recognize без `GEMINI_API_KEY` → порожні рядки, розумний статус.
+- `tests/test_xlsx.py` — `build_receipt_xlsx` формує 4 колонки; дублікати на один товар → ОДИН рядок (сума к-сті, зважена ціна).
 - `tests/test_models.py` — створення моделей, `unique_together`, дефолтний статус `Receipt`.
 - `tests/test_api_smoke.py` — `/api/schema/` віддає `200`; `/api/suppliers/` без авторизації → `401`.
 
@@ -346,37 +374,47 @@ npm run build-storybook
 
 ## Деплой (Hetzner + Docker Compose / Coolify)
 
-Цільове середовище — **Hetzner** під **Docker Compose**.
+Цільове середовище — **Hetzner** під **Docker Compose**. Для прода є окремий, готовий до бою файл **`docker-compose.prod.yml`** (dev-файл `docker-compose.yml` НЕ чіпаємо).
 
-1. **Сервер.** VPS Hetzner з Docker + Docker Compose. Відкрити порти для зворотного проксі (HTTPS).
-2. **Конфігурація.** На сервері заповнити `backend/.env` бойовими значеннями:
-   - `DEBUG=False`, реальний `SECRET_KEY`, ваш домен в `ALLOWED_HOSTS` і `CORS_ALLOWED_ORIGINS`;
-   - бойові `DATABASE_URL`, `CELERY_*`, `GEMINI_API_KEY`, `SALESDRIVE_YML_URL`, `R2_*`.
-3. **Backend для прод.** У `docker-compose.yml` замінити dev-команду `runserver` на gunicorn (закоментований варіант уже наведено):
-   ```
-   gunicorn valeraup.wsgi:application --bind 0.0.0.0:8000 --workers 3
-   ```
-4. **Celery beat у проді.** Для дев-зручності beat вбудовано у `worker` (`-B`). У продакшені винесіть beat в **окремий сервіс**, щоб розкладом володів рівно один процес (інакше періодичні задачі дублюватимуться).
-5. **Статика та медіа.** Фото й згенеровані `.xlsx` зберігаються в **Cloudflare R2** (при заданих `R2_*`). Frontend збирається у статику й роздається через **nginx** (`frontend/Dockerfile` — багатостадійна збірка node → nginx, `frontend/nginx.conf` — SPA-fallback).
-6. **Зворотний проксі та TLS.** Поставте перед стеком проксі (Caddy/Traefik/nginx) з Let's Encrypt; пропустіть API на `backend:8000`, статику — на nginx фронтенду.
-7. **Запуск/оновлення:**
+Відмінності прод-стеку від dev:
+
+- **backend** запускається через образний `entrypoint.sh`: `migrate --noinput` → `collectstatic --noinput` → `exec gunicorn valeraup.wsgi:application -b 0.0.0.0:8000 -w 3 --timeout 60` (без bind-mount джерел, без live-reload).
+- **beat** — окремий сервіс (`celery -A valeraup beat -l info`), відокремлений від `worker` (`celery -A valeraup worker -l info`), бо в проді розкладом має володіти рівно один процес. У dev beat вбудовано у worker (`-B`).
+- **frontend** — багатостадійний nginx-образ (зібраний бандл, порт 80), який проксує `/api`, `/admin`, `/static` і `/media` на `backend:8000`, тож браузер працює з одним origin (CORS у браузері не потрібен).
+- **Статика** (Django admin, Swagger UI) збирається в `STATIC_ROOT` і роздається **WhiteNoise** усередині gunicorn (middleware одразу після `SecurityMiddleware`, `STORAGES['staticfiles'] = CompressedManifestStaticFilesStorage`) — окремий статичний веб-сервер не потрібен.
+- Усі сервіси з `restart: unless-stopped`, healthcheck'ами і `depends_on: condition: service_healthy`.
+
+Кроки:
+
+1. **Сервер.** VPS Hetzner з Docker + Docker Compose. Відкрити 80/443 для зовнішнього проксі/TLS.
+2. **Конфігурація.** Скопіювати приклад і заповнити бойовими значеннями (НЕ комітити):
    ```bash
-   docker compose pull        # якщо образи в реєстрі
-   docker compose up -d --build
-   docker compose exec backend python manage.py migrate
+   cp .env.prod.example .env.prod    # DEBUG=False, SECRET_KEY, ALLOWED_HOSTS,
+                                      # CORS_ALLOWED_ORIGINS, POSTGRES_*, DATABASE_URL,
+                                      # CELERY_*, GEMINI_API_KEY, SALESDRIVE_YML_URL, R2_*
    ```
+   `POSTGRES_USER/PASSWORD/DB` мають збігатися з `DATABASE_URL` (Compose читає їх для контейнера `db`).
+3. **Міграції.** Згенеровані міграції закомічені в репо, тож `entrypoint.sh` (`migrate`) створює схему автоматично під час першого деплою — додаткових кроків не потрібно.
+4. **Медіа.** Рекомендовано задати `R2_*` — фото й `.xlsx` ляжуть у Cloudflare R2 (durable, віддаються URL-ами R2). Без R2 — fallback на іменований том `media` (його роздає nginx-проксі `/media/`).
+5. **Запуск/оновлення:**
+   ```bash
+   docker compose -f docker-compose.prod.yml --env-file .env.prod build
+   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+   ```
+   `migrate` і `collectstatic` виконуються автоматично в `entrypoint.sh` при старті `backend`.
+6. **Зворотний проксі та TLS.** Поставте перед стеком проксі (Caddy/Traefik/nginx) з Let's Encrypt і термінуйте TLS на публічному порту фронтенду (80).
 
-> **Важливо при редеплої:** ніколи не видаляйте том БД та медіа. Використовуйте `docker compose up -d --build`, а не `down + up` (том `pgdata` і дані R2 мають зберігатися між деплоями).
+> **Важливо при редеплої:** ніколи не видаляйте томи БД та медіа. Використовуйте `build` + `up -d`, а **не** `down -v` (томи `pgdata` і `media` мають зберігатися між деплоями).
 
-**Coolify (альтернатива):** Coolify на тому ж Hetzner-сервері може керувати цим `docker-compose.yml` як ресурсом — додайте змінні оточення в інтерфейсі Coolify, увімкніть автодеплой із git, налаштуйте домен і TLS. Той самий принцип: окремий beat у проді, збереження томів між деплоями.
+**Coolify (альтернатива):** Coolify на тому ж Hetzner-сервері може керувати `docker-compose.prod.yml` як ресурсом — додайте змінні оточення в інтерфейсі Coolify, увімкніть автодеплой із git, налаштуйте домен і TLS. Той самий принцип: окремий beat, збереження томів між деплоями.
 
 ---
 
 ## Подальша документація
 
 - [`CLAUDE.md`](CLAUDE.md) — інженерні стандарти: docstrings + типи, пояснення «WHY», структуроване JSON-логування, ідемпотентність, Definition of Done (docs ✓ / tests ✓ / OpenAPI ✓).
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — компоненти, потік даних, Mermaid-діаграми (flowchart + stateDiagram статусів `Receipt`).
-- [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) — SalesDrive (YML-експорт, формат Excel-імпорту, ручний крок імпорту, собівартість) і Gemini (системний промпт, JSON-формат, fence-strip + retry, аудит `raw_ocr_json`).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — компоненти, повний PWA-потік (suppliers → camera → table → mapping → generate), завантаження медіа, `recompute_receipt_status`, прод-деплой, Mermaid-діаграми (flowchart + stateDiagram статусів `Receipt`).
+- [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) — SalesDrive (YML-експорт, формат Excel-імпорту з групуванням і зваженою ціною (ТЗ §16), ручний крок) і Gemini (реальний `google-genai` виклик, системний промпт, fence-strip + retry, аудит `raw_ocr_json`).
 - [`docs/MAPPING.md`](docs/MAPPING.md) — ядро маппінгу: нормалізація SKU, lookup `(supplier, normalized sku)`, auto vs unmapped, ручний маппінг і навчання (`times_used`), крайові випадки.
 
 ---

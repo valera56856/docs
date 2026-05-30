@@ -20,8 +20,9 @@
     "@capacitor/core": "^6",
     "@capacitor/app": "^6",
     "@capacitor/camera": "^6",
-    "lucide-react": "^0.4",
+    "lucide-react": "^1.17.0",
     "class-variance-authority": "^0.7",
+    "@radix-ui/react-dialog": "^1",
     "@radix-ui/react-slot": "^1",
     "clsx": "^2",
     "tailwind-merge": "^2"

@@ -36,6 +36,9 @@ body {
   background-color: var(--color-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Ease the whole page between light/dark when ThemeProvider flips the
+     `data-theme` attribute (disabled under reduced-motion below). */
+  transition: var(--theme-transition);
   /* Respect device notch / home indicator on installed PWA. */
   padding: env(safe-area-inset-top) env(safe-area-inset-right)
     env(safe-area-inset-bottom) env(safe-area-inset-left);
@@ -91,6 +94,84 @@ h3,
 h4 {
   line-height: var(--line-height-tight);
   font-weight: var(--font-weight-semibold);
+}
+
+/* ---------------------------------------------------------------------------
+ * Keyframes for the UI kit (Sheet slide-up + overlay fade, Spinner, Skeleton,
+ * Toast). Kept here (not in Tailwind config) so the tokens stay the single
+ * source of truth and components reference stable animation names. All are
+ * suppressed under prefers-reduced-motion below.
+ * ------------------------------------------------------------------------- */
+@keyframes valeraup-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes valeraup-overlay-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+@keyframes valeraup-sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+@keyframes valeraup-sheet-out {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+@keyframes valeraup-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes valeraup-skeleton-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+@keyframes valeraup-toast-in {
+  from {
+    transform: translateY(0.75rem);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Radix sets data-state="open"/"closed" on overlay + content; drive the
+   enter/exit animations off those so the sheet animates both ways. */
+[data-valeraup-sheet-overlay][data-state='open'] {
+  animation: valeraup-overlay-in 200ms ease;
+}
+[data-valeraup-sheet-overlay][data-state='closed'] {
+  animation: valeraup-overlay-out 180ms ease;
+}
+[data-valeraup-sheet-content][data-state='open'] {
+  animation: valeraup-sheet-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+[data-valeraup-sheet-content][data-state='closed'] {
+  animation: valeraup-sheet-out 200ms ease-in;
 }
 
 /* Respect users who prefer reduced motion. */

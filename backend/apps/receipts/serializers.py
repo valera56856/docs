@@ -25,12 +25,34 @@ from .models import Receipt, ReceiptLine, ReceiptPhoto
 
 
 class ReceiptPhotoSerializer(serializers.ModelSerializer):
-    """Serialize a :class:`~apps.receipts.models.ReceiptPhoto`."""
+    """Serialize a :class:`~apps.receipts.models.ReceiptPhoto` for reads.
+
+    Exposes the stable ``image_url`` the frontend renders. The underlying
+    ``image`` file field is intentionally not serialized out — the URL is the one
+    field clients need, and it is populated from ``image.url`` on upload.
+    """
 
     class Meta:
         model = ReceiptPhoto
         fields = ["id", "image_url"]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "image_url"]
+
+
+class ReceiptPhotoUploadSerializer(serializers.Serializer):
+    """Validate a multipart photo upload (``POST .../photos/``).
+
+    The client sends the captured invoice page as a multipart ``image`` file.
+    DRF's :class:`~rest_framework.serializers.ImageField` validates it is a real,
+    Pillow-decodable image (rejecting non-image junk) before we save it.
+
+    Attributes:
+        image: The uploaded invoice-page image file (required).
+    """
+
+    image = serializers.ImageField(
+        write_only=True,
+        help_text="Файл фотографії сторінки накладної (multipart).",
+    )
 
 
 class ReceiptLineSerializer(serializers.ModelSerializer):
@@ -174,6 +196,19 @@ class ReceiptCreateSerializer(serializers.ModelSerializer):
         """
 
         return ReceiptSerializer(instance, context=self.context).data
+
+
+class ReceiptPhotoUploadResultSerializer(serializers.Serializer):
+    """Response schema for the photo-upload endpoint.
+
+    Attributes:
+        id: Primary key of the created :class:`ReceiptPhoto`.
+        image_url: URL of the stored image (from ``image.url``), for the UI to
+            render a thumbnail immediately.
+    """
+
+    id = serializers.IntegerField(read_only=True)
+    image_url = serializers.CharField(read_only=True)
 
 
 class GenerateXlsxResultSerializer(serializers.Serializer):

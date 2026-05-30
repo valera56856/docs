@@ -1,24 +1,28 @@
 /**
  * SuppliersPage — pick the supplier whose invoice you're about to photograph.
  *
- * Loads active suppliers from `GET /api/suppliers/`. Selecting one navigates to
- * the camera, carrying the chosen supplier id so the new receipt is created
- * against it.
+ * Loads active suppliers from `GET /api/suppliers/`. Tapping one creates a draft
+ * receipt (`POST /api/receipts/`) and navigates to that receipt's camera screen,
+ * carrying the new receipt id in the URL.
  *
- * States covered (mobile-first):
- * - loading  -> skeleton list (TODO)
- * - empty    -> guidance to add a supplier
- * - error    -> retry affordance
- * - list     -> large (>=44px) tappable rows
+ * States covered (mobile-first, all via the kit):
+ * - loading  -> {@link Skeleton} row placeholders
+ * - empty    -> {@link EmptyState} guiding the operator to admin
+ * - error    -> {@link EmptyState} with a retry action + an error {@link useToast}
+ * - list     -> large (>=44px) tappable {@link Card} rows
  */
 import { useCallback, useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight, Store } from 'lucide-react';
+import { ChevronRight, RotateCcw, Store } from 'lucide-react';
 
-import { api } from '@/lib/api';
-import { cn } from '@/lib/cn';
+import { suppliers as suppliersApi, receipts as receiptsApi } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { ThemeToggle } from '@/components/ThemeProvider';
+import { useToast } from '@/components/ui/Toast';
 import type { Supplier } from '@/types';
 
 /** Async data state for the supplier list. */
@@ -31,88 +35,112 @@ type LoadState = 'loading' | 'ready' | 'error';
  */
 export function SuppliersPage(): JSX.Element {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const [state, setState] = useState<LoadState>('loading');
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [items, setItems] = useState<Supplier[]>([]);
+  /** Id of the supplier whose receipt is being created (disables that row). */
+  const [creatingId, setCreatingId] = useState<number | null>(null);
 
   /** Fetch active suppliers; sets the load state accordingly. */
   const load = useCallback(async () => {
     setState('loading');
     try {
-      const data = await api.get<Supplier[]>('/suppliers/');
-      setSuppliers(data);
+      const data = await suppliersApi.list();
+      setItems(data);
       setState('ready');
     } catch {
       setState('error');
+      toast({
+        variant: 'error',
+        title: 'Не вдалося завантажити постачальників',
+        description: 'Перевірте зʼєднання та спробуйте ще раз.',
+      });
     }
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   /**
-   * Begin a new receipt for the selected supplier by moving to the camera.
-   * The supplier id rides along in router state.
+   * Begin a new receipt for the selected supplier: create the draft, then move
+   * to its camera screen. The receipt id lives in the URL from here on.
    *
    * @param supplier - The chosen supplier.
    */
-  function pick(supplier: Supplier): void {
-    navigate('/receipt/new', { state: { supplierId: supplier.id } });
-  }
+  const pick = useCallback(
+    async (supplier: Supplier) => {
+      setCreatingId(supplier.id);
+      try {
+        const receipt = await receiptsApi.create(supplier.id);
+        navigate(`/receipt/${receipt.id}/camera`);
+      } catch {
+        toast({
+          variant: 'error',
+          title: 'Не вдалося створити накладну',
+          description: 'Спробуйте обрати постачальника ще раз.',
+        });
+        setCreatingId(null);
+      }
+    },
+    [navigate, toast],
+  );
 
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)]">
-      <h1 className="text-[var(--font-size-xl)]">Оберіть постачальника</h1>
+      <header className="flex items-center justify-between gap-2">
+        <h1 className="text-[var(--font-size-xl)]">Оберіть постачальника</h1>
+        <ThemeToggle />
+      </header>
 
-      {/* TODO(ux): skeleton rows instead of plain text while loading. */}
       {state === 'loading' && (
-        <p className="text-[var(--color-text-muted)]">Завантаження…</p>
+        <ul className="flex flex-col gap-2" aria-hidden>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <li key={i}>
+              <Skeleton height={64} className="w-full" />
+            </li>
+          ))}
+        </ul>
       )}
 
       {state === 'error' && (
-        <div className="flex flex-col items-start gap-[var(--space-3)]">
-          <p role="alert" className="text-[var(--color-danger)]">
-            Не вдалося завантажити постачальників.
-          </p>
-          <Button intent="secondary" onClick={() => void load()}>
-            Спробувати ще раз
-          </Button>
-        </div>
+        <EmptyState
+          icon={RotateCcw}
+          title="Помилка завантаження"
+          hint="Не вдалося отримати список постачальників."
+          action={
+            <Button intent="secondary" onClick={() => void load()}>
+              <RotateCcw size={18} aria-hidden /> Спробувати ще раз
+            </Button>
+          }
+        />
       )}
 
-      {state === 'ready' && suppliers.length === 0 && (
-        <div className="rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] p-[var(--space-6)] text-center">
-          <Store
-            size={28}
-            aria-hidden
-            className="mx-auto text-[var(--color-text-muted)]"
-          />
-          <p className="mt-[var(--space-2)] text-[var(--color-text-muted)]">
-            Немає активних постачальників. Додайте їх у розділі адміністрування.
-          </p>
-        </div>
+      {state === 'ready' && items.length === 0 && (
+        <EmptyState
+          icon={Store}
+          title="Немає постачальників"
+          hint="Додайте активних постачальників у розділі адміністрування."
+        />
       )}
 
-      {state === 'ready' && suppliers.length > 0 && (
+      {state === 'ready' && items.length > 0 && (
         <ul className="flex flex-col gap-2">
-          {suppliers.map((supplier) => (
+          {items.map((supplier) => (
             <li key={supplier.id}>
-              <button
-                type="button"
-                onClick={() => pick(supplier)}
-                className={cn(
-                  'flex min-h-[var(--touch-target-min)] w-full items-center',
-                  'justify-between gap-[var(--space-3)] rounded-[var(--radius-md)]',
-                  'border border-[var(--color-border)] bg-[var(--color-surface)]',
-                  'px-[var(--space-4)] py-[var(--space-3)] text-left',
-                  'hover:bg-[var(--color-surface-muted)]',
-                )}
+              <Card
+                as="button"
+                interactive
+                disabled={creatingId !== null}
+                onClick={() => void pick(supplier)}
+                aria-busy={creatingId === supplier.id}
+                className="flex min-h-[var(--touch-target-min)] items-center justify-between gap-[var(--space-3)]"
               >
                 <span className="flex items-center gap-[var(--space-3)]">
                   <Store
                     size={20}
                     aria-hidden
-                    className="text-[var(--color-blue)]"
+                    className="shrink-0 text-[var(--color-blue)]"
                   />
                   <span className="font-[var(--font-weight-medium)]">
                     {supplier.name}
@@ -121,9 +149,9 @@ export function SuppliersPage(): JSX.Element {
                 <ChevronRight
                   size={20}
                   aria-hidden
-                  className="text-[var(--color-text-muted)]"
+                  className="shrink-0 text-[var(--color-text-muted)]"
                 />
-              </button>
+              </Card>
             </li>
           ))}
         </ul>

@@ -16,10 +16,12 @@ from django.db.models import Q
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status
 from rest_framework.generics import ListAPIView
-from rest_framework.permissions import IsAdminUser, IsAuthenticated
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from apps.accounts.permissions import IsAdmin
 
 from .models import OurProduct
 from .serializers import CatalogSyncResultSerializer, OurProductSerializer
@@ -82,9 +84,13 @@ class CatalogSyncView(APIView):
     Admin-only. Enqueues the Celery task that fetches and parses the SalesDrive
     YML export and upserts :class:`OurProduct` rows, then returns the task id so
     the caller can poll progress. The actual sync runs out-of-band on a worker.
+
+    ``admin`` here is the Valeraup product role on the user's
+    :class:`~apps.accounts.models.Profile` (see :class:`IsAdmin`), *not* Django's
+    ``is_staff`` flag — catalog sync is a product-admin action.
     """
 
-    permission_classes = [IsAuthenticated, IsAdminUser]
+    permission_classes = [IsAuthenticated, IsAdmin]
 
     @extend_schema(
         request=None,

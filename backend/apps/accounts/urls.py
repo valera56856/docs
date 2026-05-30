@@ -3,10 +3,11 @@
 Mounted under ``/api/auth/`` by ``valeraup/urls.py``, so the paths declared here
 are relative to that prefix:
 
-* ``login/``   to :class:`EmailTokenObtainPairView` (email + password to JWT)
-* ``refresh/`` to SimpleJWT ``TokenRefreshView`` (refresh access to JWT)
-* ``pin/``     to :class:`PinLoginView` (PIN to JWT)
-* ``me/``      to :class:`MeView` (current profile summary)
+* ``login/``    to :class:`EmailTokenObtainPairView` (email + password to JWT)
+* ``refresh/``  to SimpleJWT ``TokenRefreshView`` (refresh access to JWT)
+* ``pin/``      to :class:`PinLoginView` (PIN to JWT)
+* ``me/``       to :class:`MeView` (current profile summary)
+* ``set-pin/``  to :class:`SetPinView` (set/replace the caller's PIN)
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .views import EmailTokenObtainPairView, MeView, PinLoginView
+from .views import EmailTokenObtainPairView, MeView, PinLoginView, SetPinView
 
 app_name = "accounts"
 
@@ -23,4 +24,5 @@ urlpatterns = [
     path("refresh/", TokenRefreshView.as_view(), name="refresh"),
     path("pin/", PinLoginView.as_view(), name="pin"),
     path("me/", MeView.as_view(), name="me"),
+    path("set-pin/", SetPinView.as_view(), name="set-pin"),
 ]

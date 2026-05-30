@@ -1,15 +1,20 @@
 """Authentication views for the accounts app.
 
-Implements the three contract auth endpoints:
+Implements the contract auth endpoints:
 
 * ``POST /api/auth/login/`` — email + password to JWT pair
   (:class:`EmailTokenObtainPairView`).
 * ``POST /api/auth/refresh/`` — refresh access token (SimpleJWT
   ``TokenRefreshView``, wired directly in ``urls.py``).
 * ``POST /api/auth/pin/`` — 4-digit PIN to JWT pair (:class:`PinLoginView`).
+* ``GET  /api/auth/me/`` — current profile summary (:class:`MeView`).
+* ``POST /api/auth/set-pin/`` — set/replace the caller's PIN
+  (:class:`SetPinView`, authenticated).
 
-All three are deliberately ``AllowAny``: they are how a client *obtains*
-credentials, so requiring authentication would be circular.
+The first three are deliberately ``AllowAny``: they are how a client *obtains*
+credentials, so requiring authentication would be circular. ``me`` and
+``set-pin`` instead require an authenticated caller — you cannot set a PIN for an
+account you have not already proven you own.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from .serializers import (
     EmailTokenObtainPairSerializer,
     PinLoginSerializer,
     ProfileSerializer,
+    SetPinSerializer,
     TokenPairSerializer,
 )
 
@@ -166,3 +172,64 @@ class MeView(APIView):
             "has_pin": bool(profile and profile.pin_hash),
         }
         return Response(ProfileSerializer(data).data, status=status.HTTP_200_OK)
+
+
+class SetPinView(APIView):
+    """Set or replace the authenticated caller's 4-digit PIN.
+
+    The PWA calls this after the operator chooses a PIN so that future logins can
+    use the fast :class:`PinLoginView` flow (optionally behind device
+    biometrics). The PIN is hashed with Django's ``make_password`` and stored on
+    the caller's :class:`~apps.accounts.models.Profile.pin_hash` — it is never
+    persisted or logged in plaintext.
+
+    Requires authentication: a user may only set *their own* PIN, identified by
+    the request's JWT, so this endpoint cannot be used to overwrite another
+    account's credential.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=SetPinSerializer,
+        responses={204: None},
+        summary="Встановити PIN-код",
+        description=(
+            "Хешує переданий 4-значний PIN та зберігає його у Profile.pin_hash "
+            "поточного користувача. Повертає 204 без тіла."
+        ),
+    )
+    def post(self, request: Request) -> Response:
+        """Hash the supplied PIN onto the caller's profile.
+
+        Args:
+            request: Authenticated DRF request carrying ``pin`` (4 digits).
+
+        Returns:
+            ``204 No Content`` on success. The PIN itself is never echoed.
+
+        Notes:
+            Uses ``get_or_create`` to be robust even if the profile is somehow
+            missing (defence in depth on top of the auto-create signal). Only the
+            ``pin_hash`` column is written via ``update_fields`` to avoid touching
+            the role.
+        """
+
+        from django.contrib.auth.hashers import make_password
+
+        from .models import Profile
+
+        serializer = SetPinSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        pin = serializer.validated_data["pin"]
+
+        profile, _ = Profile.objects.get_or_create(
+            user=request.user,
+            defaults={"role": Profile.ROLE_OPERATOR},
+        )
+        profile.pin_hash = make_password(pin)
+        profile.save(update_fields=["pin_hash"])
+
+        # Log the action but NEVER the PIN value.
+        logger.info("pin_set", extra={"user_id": request.user.pk})
+        return Response(status=status.HTTP_204_NO_CONTENT)

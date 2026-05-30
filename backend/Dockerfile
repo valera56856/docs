@@ -39,10 +39,19 @@ RUN pip install --upgrade pip \
 # --- Application source --------------------------------------------------------
 COPY . .
 
+# Make the production entrypoint executable. It is COPYed in via `COPY . .`
+# above; chmod here so it runs as the container CMD regardless of the host's
+# file mode bits (e.g. a Windows/Git checkout that drops the +x bit).
+RUN chmod +x /app/entrypoint.sh
+
 # Django dev/prod server port.
 EXPOSE 8000
 
-# Default command is the API server; Compose overrides this for the worker.
-# `migrate` is run by the Compose `command`, not here, to keep the image command
-# side-effect free and reusable by the worker.
-CMD ["gunicorn", "valeraup.wsgi:application", "--bind", "0.0.0.0:8000", "--workers", "3"]
+# Default command is the production entrypoint: migrate, collectstatic, then
+# exec gunicorn (see backend/entrypoint.sh). This is what docker-compose.prod.yml
+# uses for the `backend` service. Compose OVERRIDES `command:` for:
+#   * dev `backend`  → runserver (live reload, no collectstatic)
+#   * worker / beat  → `celery -A valeraup worker|beat`
+# so a single image serves the API server, the entrypoint, and the Celery
+# processes; only the command differs per service.
+CMD ["/app/entrypoint.sh"]

@@ -5,6 +5,7 @@ Mounted under ``/api/`` by ``valeraup/urls.py``. Patterns carry their own
 
 * ``POST  /api/receipts/``                         to :class:`ReceiptCreateView`
 * ``GET   /api/receipts/{id}/``                     to :class:`ReceiptDetailView`
+* ``POST  /api/receipts/{id}/photos/``              to :class:`ReceiptPhotoUploadView`
 * ``POST  /api/receipts/{id}/recognize/``           to :class:`ReceiptRecognizeView`
 * ``POST  /api/receipts/{id}/generate-xlsx/``       to :class:`ReceiptGenerateXlsxView`
 * ``PATCH /api/receipts/{id}/lines/{line_id}/``     to :class:`ReceiptLineUpdateView`
@@ -24,6 +25,7 @@ from .views import (
     ReceiptGenerateXlsxView,
     ReceiptLineMapView,
     ReceiptLineUpdateView,
+    ReceiptPhotoUploadView,
     ReceiptRecognizeView,
 )
 
@@ -32,6 +34,11 @@ app_name = "receipts"
 urlpatterns = [
     path("receipts/", ReceiptCreateView.as_view(), name="receipt-create"),
     path("receipts/<int:pk>/", ReceiptDetailView.as_view(), name="receipt-detail"),
+    path(
+        "receipts/<int:pk>/photos/",
+        ReceiptPhotoUploadView.as_view(),
+        name="receipt-photo-upload",
+    ),
     path(
         "receipts/<int:pk>/recognize/",
         ReceiptRecognizeView.as_view(),

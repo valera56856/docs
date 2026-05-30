@@ -76,8 +76,23 @@ class ReceiptPhoto(models.Model):
 
     Attributes:
         receipt: The receipt this photo belongs to. Cascades on receipt delete.
-        image_url: URL of the stored image (typically Cloudflare R2); this is
-            what OCR fetches and the UI displays.
+        image: The uploaded image file itself, saved through Django's default
+            storage (Cloudflare R2 in production, local ``MEDIA_ROOT`` in dev).
+            This is the source of truth the OCR task reads bytes from
+            server-side — having the file (not just a URL) lets the worker open
+            it via ``default_storage`` without an extra HTTP round-trip and
+            without needing the image to be publicly reachable. Optional so a
+            photo can still be created from a pre-uploaded URL (back-compat).
+        image_url: URL of the stored image (typically Cloudflare R2); populated
+            from :attr:`image.url` on upload, or supplied directly for the
+            legacy "upload to storage then POST URLs" flow. The UI displays it.
+
+    WHY both ``image`` and ``image_url`` exist:
+        The photo-upload endpoint streams the file to storage and the OCR worker
+        must re-read those exact bytes. An ``ImageField`` gives the worker a
+        storage handle (``photo.image.open()``), while ``image_url`` stays the
+        single, stable field the frontend and serializers render. They are kept
+        in sync on upload; either may be blank when the other carries the photo.
     """
 
     receipt = models.ForeignKey(
@@ -85,7 +100,11 @@ class ReceiptPhoto(models.Model):
         related_name="photos",
         on_delete=models.CASCADE,
     )
-    image_url = models.URLField()
+    # ``upload_to`` partitions uploads by year/month so a storage bucket does not
+    # accumulate millions of objects in one prefix. Blank-allowed because a photo
+    # may instead be created from a pre-uploaded ``image_url`` (back-compat path).
+    image = models.ImageField(upload_to="receipts/%Y/%m/", blank=True, null=True)
+    image_url = models.URLField(blank=True)
 
     def __str__(self) -> str:
         """Return a readable label for admin lists and logs.

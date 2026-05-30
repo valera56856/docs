@@ -209,12 +209,16 @@ def test_receipt_line_matched_product_set_null_on_delete() -> None:
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db
 def test_profile_defaults_to_operator_role() -> None:
-    """A profile defaults to the least-privileged operator role."""
+    """The post_save signal auto-creates exactly one operator Profile per user."""
     user = get_user_model().objects.create_user(
         username="op", email="op@example.com", password="pass1234"
     )
-    profile = Profile.objects.create(user=user)
 
+    # apps.accounts.signals.ensure_profile creates the Profile on user creation,
+    # so we read it back rather than creating a second one (OneToOne is unique).
+    profile = user.profile
+
+    assert Profile.objects.filter(user=user).count() == 1
     assert profile.role == Profile.ROLE_OPERATOR
     assert profile.pin_hash == ""
 
@@ -230,11 +234,13 @@ def test_profile_pin_is_stored_hashed() -> None:
     user = get_user_model().objects.create_user(
         username="admin", email="admin@example.com", password="pass1234"
     )
-    profile = Profile.objects.create(
-        user=user,
-        role=Profile.ROLE_ADMIN,
-        pin_hash=make_password("1234"),
-    )
+
+    # Use the signal-created profile and set the PIN on it (the endpoint does the
+    # same: hash the PIN into the existing Profile, never create a duplicate).
+    profile = user.profile
+    profile.role = Profile.ROLE_ADMIN
+    profile.pin_hash = make_password("1234")
+    profile.save(update_fields=["role", "pin_hash"])
 
     assert profile.pin_hash != "1234"  # not plaintext
     assert check_password("1234", profile.pin_hash) is True

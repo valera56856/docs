@@ -15,10 +15,15 @@ from apps.receipts.models import Receipt, ReceiptLine, ReceiptPhoto
 
 
 class ReceiptPhotoInline(admin.TabularInline):
-    """Inline editor for a receipt's photographed pages."""
+    """Inline editor for a receipt's photographed pages.
+
+    Shows both the uploaded ``image`` file and the derived ``image_url`` so staff
+    can confirm a page reached storage and inspect what OCR will read.
+    """
 
     model = ReceiptPhoto
     extra = 0
+    fields = ("image", "image_url")
 
 
 class ReceiptLineInline(admin.TabularInline):
@@ -51,7 +56,7 @@ class ReceiptAdmin(admin.ModelAdmin):
 class ReceiptPhotoAdmin(admin.ModelAdmin):
     """Admin configuration for :class:`ReceiptPhoto` (standalone view)."""
 
-    list_display = ("id", "receipt", "image_url")
+    list_display = ("id", "receipt", "image", "image_url")
 
 
 @admin.register(ReceiptLine)

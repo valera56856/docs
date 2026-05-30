@@ -18,10 +18,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": [
-    "vite.config.ts",
-    "capacitor.config.ts",
-    ".storybook/main.ts",
-    ".storybook/preview.ts"
-  ]
+  "include": ["vite.config.ts", "capacitor.config.ts"]
 }

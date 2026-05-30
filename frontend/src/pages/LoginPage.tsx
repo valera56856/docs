@@ -7,17 +7,20 @@
  *   gate the PIN later via Capacitor — see TODO.
  *
  * On success the {@link useAuth} provider stores tokens and we navigate to the
- * supplier picker, the natural first step of the receipt flow.
+ * supplier picker, the natural first step of the receipt flow. Inputs use the
+ * kit {@link Input} (labelled, error-aware, 44px touch floor) so the screen
+ * reskins in dark mode alongside the rest of the app.
  */
 import { useState } from 'react';
-import type { FormEvent, HTMLAttributes, JSX } from 'react';
+import type { FormEvent, JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { KeyRound, LogIn } from 'lucide-react';
 
 import { useAuth } from '@/lib/auth';
 import { ApiError } from '@/lib/api';
-import { cn } from '@/lib/cn';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
+import { ThemeToggle } from '@/components/ThemeProvider';
 
 /** Which auth method the form is currently showing. */
 type Mode = 'password' | 'pin';
@@ -55,7 +58,6 @@ export function LoginPage(): JSX.Element {
       // Land on the supplier picker — first step of shooting an invoice.
       navigate('/suppliers', { replace: true });
     } catch (err) {
-      // TODO(ux): map specific status codes (401 vs 5xx) to distinct messages.
       const msg =
         err instanceof ApiError && err.status === 401
           ? 'Невірні дані для входу.'
@@ -68,6 +70,10 @@ export function LoginPage(): JSX.Element {
 
   return (
     <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-[var(--space-6)] p-[var(--space-6)]">
+      <div className="flex justify-end">
+        <ThemeToggle />
+      </div>
+
       <header className="text-center">
         <h1 className="text-[var(--font-size-2xl)] text-[var(--color-navy)]">
           Valeraup
@@ -78,11 +84,7 @@ export function LoginPage(): JSX.Element {
       </header>
 
       {/* Mode toggle */}
-      <div
-        className="flex gap-2"
-        role="tablist"
-        aria-label="Спосіб входу"
-      >
+      <div className="flex gap-2" role="tablist" aria-label="Спосіб входу">
         <Button
           role="tab"
           aria-selected={mode === 'password'}
@@ -103,28 +105,23 @@ export function LoginPage(): JSX.Element {
         </Button>
       </div>
 
-      <form
-        className="flex flex-col gap-[var(--space-4)]"
-        onSubmit={handleSubmit}
-      >
+      <form className="flex flex-col gap-[var(--space-4)]" onSubmit={handleSubmit}>
         {mode === 'password' ? (
           <>
-            <Field
-              id="email"
+            <Input
               label="Email"
               type="email"
               autoComplete="email"
               value={email}
-              onChange={setEmail}
+              onChange={(e) => setEmail(e.target.value)}
               required
             />
-            <Field
-              id="password"
+            <Input
               label="Пароль"
               type="password"
               autoComplete="current-password"
               value={password}
-              onChange={setPassword}
+              onChange={(e) => setPassword(e.target.value)}
               required
             />
           </>
@@ -133,24 +130,22 @@ export function LoginPage(): JSX.Element {
             {/* PIN login still needs the email to identify the profile whose
                 PIN is checked. On a trusted device this would be prefilled
                 from the last login (TODO: persist + biometric gate). */}
-            <Field
-              id="pin-email"
+            <Input
               label="Email"
               type="email"
               autoComplete="email"
               value={email}
-              onChange={setEmail}
+              onChange={(e) => setEmail(e.target.value)}
               required
             />
-            <Field
-              id="pin"
+            <Input
               label="4-значний PIN"
               type="password"
               inputMode="numeric"
               autoComplete="off"
               maxLength={4}
               value={code}
-              onChange={(v) => setCode(v.replace(/\D/g, '').slice(0, 4))}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
               required
             />
           </>
@@ -173,61 +168,5 @@ export function LoginPage(): JSX.Element {
       {/* TODO(native): biometric unlock (Face ID / fingerprint) before PIN via
           a Capacitor biometrics plugin on supported devices. */}
     </main>
-  );
-}
-
-/** Props for the small labelled {@link Field} input helper. */
-interface FieldProps {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  type?: string;
-  required?: boolean;
-  maxLength?: number;
-  autoComplete?: string;
-  inputMode?: HTMLAttributes<HTMLInputElement>['inputMode'];
-}
-
-/**
- * A labelled text input that respects the 44px touch minimum.
- *
- * @param props - {@link FieldProps}.
- * @returns The labelled input group.
- */
-function Field({
-  id,
-  label,
-  value,
-  onChange,
-  type = 'text',
-  required,
-  maxLength,
-  autoComplete,
-  inputMode,
-}: FieldProps): JSX.Element {
-  return (
-    <div className="flex flex-col gap-1">
-      <label
-        htmlFor={id}
-        className="text-[var(--font-size-sm)] font-[var(--font-weight-medium)]"
-      >
-        {label}
-      </label>
-      <input
-        id={id}
-        type={type}
-        value={value}
-        required={required}
-        maxLength={maxLength}
-        autoComplete={autoComplete}
-        inputMode={inputMode}
-        onChange={(e) => onChange(e.target.value)}
-        className={cn(
-          'min-h-[var(--touch-target-min)] rounded-[var(--radius-md)]',
-          'border border-[var(--color-border)] px-[var(--space-3)]',
-        )}
-      />
-    </div>
   );
 }

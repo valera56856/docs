@@ -1,16 +1,19 @@
 /**
  * Application route table.
  *
- * Routes mirror the Valeraup user flow:
- *   /                  -> Login (email/password or fast PIN)
- *   /suppliers         -> pick the supplier before shooting an invoice
- *   /receipt/new       -> Camera capture of the printed invoice
- *   /receipt/:id       -> recognized lines + mapping table
- *   /receipt/:id/generate -> generate + download the .xlsx receipt
- *   /admin             -> catalog sync, users, mappings (admin only)
+ * Routes mirror the Valeraup user flow (suppliers → camera → table → mapping →
+ * generate):
+ *   /                       -> Login (email/password or fast PIN)
+ *   /suppliers              -> pick a supplier; tap creates a draft receipt
+ *   /receipt/:id/camera     -> capture + upload invoice photos, then recognize
+ *   /receipt/:id            -> recognized lines + inline edit + mapping table
+ *   /receipt/:id/generate   -> generate + download the .xlsx receipt
+ *   /admin                  -> catalog sync, suppliers, mappings (admin only)
  *
  * Auth gating: every route except `/` is wrapped in {@link RequireAuth}, which
- * redirects unauthenticated users to the login screen.
+ * redirects unauthenticated users to the login screen. The `/admin` route adds
+ * its own role check (see {@link AdminPage}), since the kit's `useAuth` does not
+ * carry the role — the page fetches `/auth/me/` and redirects non-admins.
  */
 import {
   createBrowserRouter,
@@ -22,6 +25,7 @@ import {
 import type { JSX } from 'react';
 
 import { useAuth } from '@/lib/auth';
+import { Spinner } from '@/components/ui/Spinner';
 import { LoginPage } from '@/pages/LoginPage';
 import { SuppliersPage } from '@/pages/SuppliersPage';
 import { CameraPage } from '@/pages/CameraPage';
@@ -34,18 +38,21 @@ import { AdminPage } from '@/pages/AdminPage';
  * redirects to `/`, preserving the attempted location so we can return after
  * login.
  *
- * While the initial session-restore is in flight we render nothing (a top-level
- * splash/skeleton would slot in here).
+ * While the initial session-restore is in flight we render a centered spinner
+ * (a branded splash) so the screen is never blank.
  *
- * @returns The child routes via {@link Outlet}, or a redirect.
+ * @returns The child routes via {@link Outlet}, a spinner, or a redirect.
  */
-function RequireAuth(): JSX.Element | null {
+function RequireAuth(): JSX.Element {
   const { isAuthenticated, isLoading } = useAuth();
   const location = useLocation();
 
-  // TODO(ux): replace with a branded splash skeleton during restore.
   if (isLoading) {
-    return null;
+    return (
+      <div className="flex min-h-[60dvh] items-center justify-center">
+        <Spinner size={32} label="Завантаження…" />
+      </div>
+    );
   }
 
   if (!isAuthenticated) {
@@ -62,7 +69,7 @@ export const routes: RouteObject[] = [
     element: <RequireAuth />,
     children: [
       { path: '/suppliers', element: <SuppliersPage /> },
-      { path: '/receipt/new', element: <CameraPage /> },
+      { path: '/receipt/:id/camera', element: <CameraPage /> },
       { path: '/receipt/:id', element: <ReceiptTablePage /> },
       { path: '/receipt/:id/generate', element: <GeneratePage /> },
       { path: '/admin', element: <AdminPage /> },

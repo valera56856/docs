@@ -12,6 +12,18 @@ things only:
 * :func:`parse_catalog_yml` — turn ``shop > offers > offer`` elements into plain
   ``{salesdrive_id, sku, name}`` dicts.
 
+The parser is hardened against real-world export variance:
+
+* **XML namespaces** — some exports declare a default namespace, which makes
+  ``ElementTree`` report every tag in Clark notation (``{ns}offer``). All tag
+  matching goes through :func:`_local`, which compares the bare *local* name, so
+  the same code parses namespaced and plain exports identically.
+* **Missing fields** — an offer with no ``name`` or no SKU candidate still parses
+  (empty strings) rather than crashing; only offers lacking a usable ``id`` (the
+  upsert key) are skipped.
+* **SKU resolution priority** — ``vendorCode`` > ``article`` > ``param``
+  named "Артикул"/"SKU" > offer ``id`` attribute (see :func:`_offer_sku`).
+
 The upsert into the database lives in :mod:`apps.catalog.services` so this module
 stays free of Django ORM concerns and is trivially unit-testable with a fixture
 file.
@@ -69,12 +81,63 @@ def fetch_catalog_yml(yml_url: str) -> bytes:
     return content
 
 
+def _local(tag: str | None) -> str:
+    """Return an XML tag's local name, stripping any ``{namespace}`` prefix.
+
+    ``ElementTree`` reports namespaced tags in Clark notation
+    (``{http://...}offer``). SalesDrive exports are sometimes plain and sometimes
+    carry a default namespace, so every tag comparison must be namespace-agnostic.
+    This helper collapses both forms to the bare local name (``offer``).
+
+    Args:
+        tag: A raw tag string from ``element.tag`` (may be ``None`` for comments
+            or processing instructions).
+
+    Returns:
+        The local tag name in lower case, or an empty string for a non-element
+        node. Lower-casing makes downstream comparisons case-insensitive.
+    """
+
+    if not tag:
+        return ""
+    # Clark notation: "{ns}local" → take the part after the closing brace.
+    local = tag.rsplit("}", 1)[-1]
+    return local.lower()
+
+
+def _child_text(parent: ET.Element, name: str) -> str:
+    """Return the stripped text of the first child whose local tag is ``name``.
+
+    Namespace-tolerant replacement for ``parent.findtext(name)``: it matches on
+    the local tag name (ignoring any XML namespace) and is case-insensitive, so a
+    ``<vendorCode>`` works whether or not the export declares a default namespace.
+
+    Args:
+        parent: The element to scan the direct children of.
+        name: The local child tag name to look for (compared case-insensitively).
+
+    Returns:
+        The first matching child's stripped text, or an empty string if there is
+        no such child or it has no text.
+    """
+
+    wanted = name.lower()
+    for child in parent:
+        if _local(child.tag) == wanted and child.text and child.text.strip():
+            return child.text.strip()
+    return ""
+
+
 def _offer_sku(offer: ET.Element) -> str:
     """Extract the SKU for a single ``<offer>`` element.
 
     SalesDrive does not have one canonical SKU tag across all exports, so we look
-    in priority order at the places it commonly appears, falling back to the
-    offer's ``id`` attribute as a last resort.
+    in a fixed priority order at the places it commonly appears, falling back to
+    the offer's ``id`` attribute as a last resort. The lookup is namespace- and
+    case-tolerant so exports with a default XML namespace still resolve.
+
+    Priority (highest first): ``vendorCode`` > ``article`` > a ``param`` named
+    "Артикул"/"SKU"/"vendorCode" > the offer ``id`` attribute.
 
     Args:
         offer: An ``<offer>`` XML element.
@@ -83,20 +146,22 @@ def _offer_sku(offer: ET.Element) -> str:
         The first non-empty SKU candidate found, or an empty string.
     """
 
-    # Priority order: an explicit <vendorCode>, then <article>, then a param
-    # named "Артикул"/"SKU", then finally the offer id attribute.
-    vendor_code = offer.findtext("vendorCode")
-    if vendor_code and vendor_code.strip():
-        return vendor_code.strip()
+    vendor_code = _child_text(offer, "vendorCode")
+    if vendor_code:
+        return vendor_code
 
-    article = offer.findtext("article")
-    if article and article.strip():
-        return article.strip()
+    article = _child_text(offer, "article")
+    if article:
+        return article
 
-    for param in offer.findall("param"):
-        param_name = (param.get("name") or "").strip().lower()
-        if param_name in {"артикул", "sku", "vendorcode"} and param.text:
-            text = param.text.strip()
+    # A param-based article: <param name="Артикул">A-100</param>. Match the param
+    # name case-insensitively against the known aliases.
+    for child in offer:
+        if _local(child.tag) != "param":
+            continue
+        param_name = (child.get("name") or "").strip().lower()
+        if param_name in {"артикул", "sku", "vendorcode"} and child.text:
+            text = child.text.strip()
             if text:
                 return text
 
@@ -129,9 +194,10 @@ def parse_catalog_yml(yml_bytes: bytes) -> list[dict]:
         logger.error("salesdrive_parse_error", extra={"error": str(exc)})
         raise ValueError(f"Invalid SalesDrive YML: {exc}") from exc
 
-    # The structure is yml_catalog/shop/offers/offer. Use a tolerant search so we
-    # find offers regardless of how many wrapper levels the export uses.
-    offers = root.findall(".//offer")
+    # The structure is yml_catalog/shop/offers/offer. ``iter()`` walks the whole
+    # tree regardless of wrapper depth; we filter by *local* tag name so a default
+    # XML namespace (which would otherwise prefix every tag) does not hide offers.
+    offers = [el for el in root.iter() if _local(el.tag) == "offer"]
     if not offers:
         logger.warning("salesdrive_parse_no_offers")
         raise ValueError("SalesDrive YML contains no <offer> elements")
@@ -145,7 +211,8 @@ def parse_catalog_yml(yml_bytes: bytes) -> list[dict]:
             skipped += 1
             continue
 
-        name = (offer.findtext("name") or "").strip()
+        # ``name`` is namespace-tolerant too; tolerate a missing/empty name.
+        name = _child_text(offer, "name")
         sku = _offer_sku(offer)
 
         products.append(

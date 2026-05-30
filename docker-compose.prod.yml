@@ -1,0 +1,255 @@
+# Valeraup — PRODUCTION Docker Compose stack (Hetzner host).
+#
+# This is the deploy-for-real counterpart to the dev `docker-compose.yml`. The
+# important differences from dev:
+#
+#   * backend runs gunicorn via the image entrypoint (migrate + collectstatic +
+#     gunicorn), NOT runserver — no source bind-mount, no live reload.
+#   * Celery beat runs as its OWN `beat` service, separate from `worker`. In dev
+#     the worker embeds beat with `-B`; in prod that would risk duplicate
+#     periodic tasks if the worker is ever scaled, so the schedule is owned by
+#     exactly one `beat` process.
+#   * frontend is the multi-stage nginx image (served bundle, port 80) and
+#     reverse-proxies `/api` and `/media` to the backend, so the browser talks to
+#     a single origin.
+#   * everything restarts `unless-stopped` and waits on healthchecks.
+#
+# Secrets/config come from `.env.prod` (copy `.env.prod.example`, fill real
+# values). NEVER commit `.env.prod`.
+#
+# Deploy / redeploy (NEVER `down -v` — that destroys DB + media volumes):
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod build
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d
+#
+# Media note: production should set the R2_* vars in `.env.prod` so uploaded
+# receipt photos and generated .xlsx live in Cloudflare R2 (served by R2 URLs,
+# no proxy needed). The `media` named volume + the nginx `/media/` proxy below
+# are the fallback for a single-host deploy WITHOUT R2 — uploads then persist on
+# the `media` volume and are served by the backend container.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # POSTGRES_* are read from .env.prod and MUST agree with the DATABASE_URL
+    # also in .env.prod (postgres://USER:PASSWORD@db:5432/DBNAME).
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      # Named volume — the single source of truth. It MUST survive redeploys;
+      # never run `down -v`.
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No host port published in prod: only the backend/worker/beat containers on
+    # the internal compose network need Postgres. Closes the DB to the internet.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # Not published either — only the app/worker/beat reach the broker.
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    # Image default CMD = entrypoint.sh (migrate → collectstatic → gunicorn).
+    # No `command:` override here, unlike the worker/beat below.
+    env_file:
+      - .env.prod
+    volumes:
+      # Persist user uploads when R2 is NOT configured (FileSystemStorage writes
+      # to MEDIA_ROOT=/app/media). Survives redeploys; harmless when R2 is on.
+      - media:/app/media
+      # Collected static assets live in the image (collectstatic runs at boot
+      # into STATIC_ROOT=/app/staticfiles); WhiteNoise serves them in-process,
+      # so no static volume/mount is needed.
+    healthcheck:
+      # Hit the OpenAPI schema endpoint — cheap, auth-free, exercises Django +
+      # DRF wiring. Uses python (always present) instead of curl (not in slim).
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys; sys.exit(0) if urllib.request.urlopen('http://127.0.0.1:8000/api/schema/').status==200 else sys.exit(1)\"",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    # Celery worker WITHOUT `-B`: beat is a separate service in prod (below).
+    command: celery -A valeraup worker -l info
+    env_file:
+      - .env.prod
+    volumes:
+      # Same media volume so the worker can read uploaded photo bytes for OCR
+      # when R2 is not configured.
+      - media:/app/media
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A valeraup inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        # Wait for backend so migrations are applied before the worker runs
+        # tasks that touch the schema.
+        condition: service_healthy
+
+  beat:
+    build: ./backend
+    restart: unless-stopped
+    # Dedicated Celery beat — the SINGLE owner of the periodic schedule in prod.
+    # Splitting it out (vs. the dev worker's `-B`) prevents duplicate periodic
+    # tasks if `worker` is ever scaled to multiple replicas.
+    command: celery -A valeraup beat -l info
+    env_file:
+      - .env.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      # Bake the same-origin API base into the bundle: the browser calls
+      # `/api/...` on the frontend origin, and nginx (below) proxies to backend.
+      args:
+        VITE_API_BASE_URL: /api
+    restart: unless-stopped
+    # Overlay a reverse-proxy server block (defined in `configs` below) on top
+    # of the image's SPA nginx config. It proxies /api and /media to the backend
+    # so the PWA, REST API, and uploaded media share one origin (no CORS in the
+    # browser, simpler TLS termination at this single public port).
+    configs:
+      - source: frontend_proxy
+        target: /etc/nginx/conf.d/default.conf
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+# ---------------------------------------------------------------------------
+# Named volumes — MUST persist across redeploys. Never `docker compose down -v`.
+#   pgdata — PostgreSQL data directory (all app data).
+#   media  — uploaded receipt photos + generated .xlsx (only used when R2 is off).
+# ---------------------------------------------------------------------------
+volumes:
+  pgdata:
+  media:
+
+# ---------------------------------------------------------------------------
+# Inline nginx reverse-proxy config for the frontend container. Defined here
+# (rather than as a separate committed file) so the whole prod proxy contract
+# lives in one place. It mirrors the SPA caching/history-fallback rules from
+# frontend/nginx.conf and ADDS the /api and /media proxy passes to the backend
+# service on the compose network.
+# ---------------------------------------------------------------------------
+configs:
+  frontend_proxy:
+    # NOTE: every `$` below is doubled to `$$` — Compose interpolates `$VAR` in
+    # `content`, so nginx runtime variables ($host, $uri, ...) MUST be escaped as
+    # `$$host`, `$$uri` to reach the container as a literal single `$`.
+    content: |
+      server {
+          listen 80;
+          server_name _;
+
+          root /usr/share/nginx/html;
+          index index.html;
+
+          # Cap upload body size for receipt photos (phone cameras ~ a few MB).
+          client_max_body_size 25m;
+
+          gzip on;
+          gzip_types text/plain text/css application/json application/javascript
+                     application/manifest+json image/svg+xml;
+          gzip_min_length 1024;
+
+          # REST API → Django/gunicorn backend on the internal compose network.
+          location /api/ {
+              proxy_pass http://backend:8000;
+              proxy_set_header Host $$host;
+              proxy_set_header X-Real-IP $$remote_addr;
+              proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $$scheme;
+              proxy_read_timeout 90s;
+          }
+
+          # Django admin + DRF/Swagger UI (static admin assets come via /static).
+          location /admin/ {
+              proxy_pass http://backend:8000;
+              proxy_set_header Host $$host;
+              proxy_set_header X-Real-IP $$remote_addr;
+              proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $$scheme;
+          }
+
+          # Collected Django static (admin CSS, Swagger UI) — served by
+          # WhiteNoise inside gunicorn.
+          location /static/ {
+              proxy_pass http://backend:8000;
+              proxy_set_header Host $$host;
+              proxy_set_header X-Forwarded-Proto $$scheme;
+          }
+
+          # Uploaded media fallback when R2 is OFF (FileSystemStorage). When R2
+          # IS configured, image_url/xlsx_url are absolute R2 URLs and this block
+          # is simply never hit.
+          location /media/ {
+              proxy_pass http://backend:8000;
+              proxy_set_header Host $$host;
+              proxy_set_header X-Forwarded-Proto $$scheme;
+          }
+
+          # Immutable hashed build assets.
+          location /assets/ {
+              expires 1y;
+              add_header Cache-Control "public, immutable";
+              try_files $$uri =404;
+          }
+
+          # Service worker + manifest must always revalidate.
+          location = /sw.js {
+              add_header Cache-Control "no-cache, no-store, must-revalidate";
+              try_files $$uri =404;
+          }
+          location = /manifest.webmanifest {
+              add_header Cache-Control "no-cache";
+              try_files $$uri =404;
+          }
+
+          # SPA history fallback — unknown paths return index.html so React
+          # Router client routes resolve on reload.
+          location / {
+              add_header Cache-Control "no-cache";
+              try_files $$uri $$uri/ /index.html;
+          }
+      }

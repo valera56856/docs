@@ -28,6 +28,7 @@ from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.generics import CreateAPIView, RetrieveAPIView
+from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
 from rest_framework.response import Response
@@ -35,15 +36,18 @@ from rest_framework.views import APIView
 
 from apps.mapping.serializers import MapLineRequestSerializer
 
-from .models import Receipt, ReceiptLine
+from .models import Receipt, ReceiptLine, ReceiptPhoto
 from .serializers import (
     GenerateXlsxResultSerializer,
     ReceiptCreateSerializer,
     ReceiptLinePatchSerializer,
     ReceiptLineSerializer,
+    ReceiptPhotoUploadResultSerializer,
+    ReceiptPhotoUploadSerializer,
     ReceiptSerializer,
     RecognizeResultSerializer,
 )
+from .services.status import recompute_receipt_status, set_receipt_status
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +77,12 @@ def _actor(request: Request) -> str:
     tags=["receipts"],
 )
 class ReceiptCreateView(CreateAPIView):
-    """Create a draft receipt and attach photo URLs (``POST /api/receipts/``)."""
+    """Create a draft receipt (``POST /api/receipts/``).
+
+    The camera-first PWA flow posts just ``{"supplier": id}`` to open a ``draft``
+    receipt, then uploads photos via ``POST .../photos/``. The legacy
+    ``photo_urls`` field remains optional for back-compat (pre-upload-then-POST).
+    """
 
     serializer_class = ReceiptCreateSerializer
     permission_classes = [IsAuthenticated]
@@ -115,6 +124,70 @@ class ReceiptDetailView(RetrieveAPIView):
     )
 
 
+class ReceiptPhotoUploadView(APIView):
+    """Upload one invoice-page photo (``POST /api/receipts/{id}/photos/``).
+
+    Accepts a multipart request with an ``image`` file, saves it as a
+    :class:`~apps.receipts.models.ReceiptPhoto` through Django's default storage
+    (Cloudflare R2 in production, local ``MEDIA_ROOT`` in dev), and returns the
+    new photo's id and stored URL so the UI can show a thumbnail immediately.
+
+    WHY a dedicated multipart endpoint (vs the legacy ``photo_urls`` on create):
+        The OCR worker reads image bytes server-side, so the file must reach our
+        storage. Uploading directly here means the client does not need its own
+        R2 credentials and the bytes are guaranteed present before recognition.
+    """
+
+    permission_classes = [IsAuthenticated]
+    # Accept multipart/form-data (the file) — without these parsers DRF would try
+    # to JSON-decode the body and reject the upload.
+    parser_classes = [MultiPartParser, FormParser]
+
+    @extend_schema(
+        request=ReceiptPhotoUploadSerializer,
+        responses={201: ReceiptPhotoUploadResultSerializer},
+        summary="Завантажити фото сторінки накладної",
+        tags=["receipts"],
+    )
+    def post(self, request: Request, pk: int) -> Response:
+        """Save the uploaded image as a receipt photo.
+
+        Args:
+            request: Authenticated multipart request carrying the ``image`` file.
+            pk: Receipt primary key from the URL.
+
+        Returns:
+            ``201 Created`` with ``{"id", "image_url"}``. ``404`` if the receipt
+            does not exist; ``400`` if no valid image was supplied.
+        """
+
+        receipt = get_object_or_404(Receipt, pk=pk)
+
+        serializer = ReceiptPhotoUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        image_file = serializer.validated_data["image"]
+
+        # Save the file first so storage assigns the final path, then mirror its
+        # public URL into ``image_url`` (the single field the frontend renders).
+        photo = ReceiptPhoto(receipt=receipt, image=image_file)
+        photo.save()
+        photo.image_url = photo.image.url
+        photo.save(update_fields=["image_url"])
+
+        logger.info(
+            "receipt_photo_uploaded",
+            extra={
+                "receipt_id": receipt.pk,
+                "photo_id": photo.pk,
+                "image_url": photo.image_url,
+            },
+        )
+        return Response(
+            {"id": photo.pk, "image_url": photo.image_url},
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class ReceiptRecognizeView(APIView):
     """Enqueue Gemini OCR for a receipt (``POST /api/receipts/{id}/recognize/``).
 
@@ -151,9 +224,9 @@ class ReceiptRecognizeView(APIView):
         receipt = get_object_or_404(Receipt, pk=pk)
 
         # Flip to ``recognizing`` so the UI shows progress as soon as the task is
-        # queued; the task itself moves it on to needs_mapping/ready/error.
-        receipt.status = "recognizing"
-        receipt.save(update_fields=["status"])
+        # queued; the task itself moves it on to needs_mapping/ready/error. The
+        # status helper validates the transition is legal from the current state.
+        set_receipt_status(receipt, "recognizing")
 
         async_result = recognize_receipt_task.delay(receipt.pk)
         logger.info(
@@ -194,12 +267,23 @@ class ReceiptLineUpdateView(APIView):
             ``200`` with the updated, fully serialized line.
         """
 
-        line = get_object_or_404(ReceiptLine, pk=line_id, receipt_id=pk)
+        line = get_object_or_404(
+            ReceiptLine.objects.select_related("receipt"),
+            pk=line_id,
+            receipt_id=pk,
+        )
         serializer = ReceiptLinePatchSerializer(
             line, data=request.data, partial=True
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
+
+        # An edit can change whether the receipt is exportable (e.g. clearing a
+        # required field), so re-derive its status from the current lines. The
+        # helper is a no-op when nothing changed and never downgrades a terminal
+        # ``xlsx_ready`` / ``error`` state.
+        recompute_receipt_status(line.receipt)
+
         logger.info(
             "receipt_line_updated",
             extra={
@@ -275,6 +359,10 @@ class ReceiptLineMapView(APIView):
         line.match_status = "manual"
         line.save(update_fields=["matched_product", "match_status"])
 
+        # Mapping this line may have been the last unmapped one — recompute so the
+        # receipt flips to ``ready`` as soon as every line is matched.
+        recompute_receipt_status(line.receipt)
+
         logger.info(
             "receipt_line_mapped",
             extra={
@@ -333,13 +421,15 @@ class ReceiptGenerateXlsxView(APIView):
         )
 
         xlsx_bytes = build_receipt_xlsx(receipt)
-        filename = f"receipts/receipt_{receipt.pk}.xlsx"
+        filename = f"receipts/xlsx/{receipt.pk}.xlsx"
         saved_path = default_storage.save(filename, ContentFile(xlsx_bytes))
         xlsx_url = default_storage.url(saved_path)
 
+        # Record the URL, then flip status via the status helper (which validates
+        # the transition and logs it) so the workflow advances in one place.
         receipt.xlsx_url = xlsx_url
-        receipt.status = "xlsx_ready"
-        receipt.save(update_fields=["xlsx_url", "status"])
+        receipt.save(update_fields=["xlsx_url"])
+        set_receipt_status(receipt, "xlsx_ready")
 
         logger.info(
             "receipt_xlsx_generated",

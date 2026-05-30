@@ -36,10 +36,17 @@ photo → Gemini OCR → ReceiptLine(recognized_sku) → match_line() ─┬─ 
   (`apps.receipts.views.ReceiptLineMapView`) calls `remember_mapping()`, sets the
   line to `match_status="manual"`, and the mapping now exists for next time.
 
-The receipt's status is driven directly by mapping results:
+The receipt's status is driven directly by mapping results, via
+`recompute_receipt_status` (`apps.receipts.services.status`) which the OCR task,
+the map endpoint, and line edits all call:
 
 * every line matched (auto or already manual) → `Receipt.status = "ready"`;
-* any line still `unmapped` → `Receipt.status = "needs_mapping"`.
+* any line still `unmapped` (or no lines) → `Receipt.status = "needs_mapping"`.
+
+Because `ReceiptLineMapView` calls `recompute_receipt_status` after setting the
+line, mapping the **last** unmapped line auto-promotes the receipt to `ready`
+without any extra call (it never auto-downgrades a terminal `xlsx_ready` /
+`error`).
 
 ---
 
@@ -293,12 +300,13 @@ The same product can appear on multiple physical lines of one invoice (e.g. two
 boxes listed separately). Each becomes its own `ReceiptLine`, and each auto-matches
 to the **same** `OurProduct` independently (and each bumps `times_used`). The
 mapping layer does not merge them — that is correct, because the lines may carry
-different prices. **Summation happens downstream, at Excel build time:** lines
-sharing the same matched product should be aggregated (quantities summed) so
-SalesDrive receives one receipt row per product. See
-[`apps/receipts/services/xlsx.py`](../backend/apps/receipts/services/xlsx.py) and
-[INTEGRATIONS.md](INTEGRATIONS.md) (weighted-average cost note) for the cost
-treatment when prices differ across the duplicate lines.
+different prices. **Summation happens downstream, at Excel build time:**
+`build_receipt_xlsx` groups lines by `matched_product`, **sums the quantities**,
+and sets the merged price to the **quantity-weighted average**
+`Σ(qty·price) / Σ(qty)` so SalesDrive receives one cost-correct row per product.
+See [`apps/receipts/services/xlsx.py`](../backend/apps/receipts/services/xlsx.py)
+and [INTEGRATIONS.md](INTEGRATIONS.md) (the weighted-price rule and the ТЗ §16
+open question on last/min price).
 
 > Rule of thumb: **mapping never de-duplicates; aggregation is the Excel step's
 > job.** Mapping's only promise is "same SKU → same product."
@@ -358,8 +366,9 @@ Every mapping decision emits a JSON log line (logger name
 | `mapping_remembered` | `remember_mapping` | `supplier_id`, `normalized_sku`, `our_product_id`, `mapping_id`, `created`, `times_used` |
 
 The receipt-side counterparts (`receipt_recognize_start/done/error`,
-`receipt_line_mapped`) live in the receipts app and tie each mapping decision back
-to a specific receipt and line.
+`receipt_line_mapped`, and the `receipt_status_set` / `receipt_status_recomputed`
+events from `services/status.py`) live in the receipts app and tie each mapping
+decision back to a specific receipt, line, and resulting status.
 
 ---
 
@@ -373,10 +382,11 @@ to a specific receipt and line.
 
 | Endpoint | Effect on mapping |
 | --- | --- |
-| `POST /api/receipts/{id}/recognize/` | creates lines, runs `match_line` per line, bumps `times_used` on auto hits |
-| `POST /api/receipts/{id}/lines/{line_id}/map/` | calls `remember_mapping`, sets line `match_status="manual"` |
-| `GET /api/products/search/?q=` | feeds the operator's manual product picker |
-| `POST /api/sync/catalog/` | refreshes the catalog so missing products become mappable |
+| `POST /api/receipts/{id}/recognize/` | creates lines, runs `match_line` per line, bumps `times_used` on auto hits, then `recompute_receipt_status` |
+| `POST /api/receipts/{id}/lines/{line_id}/map/` | calls `remember_mapping`, sets line `match_status="manual"`, then `recompute_receipt_status` (auto-promotes to `ready`) |
+| `PATCH /api/receipts/{id}/lines/{line_id}/` | edits qty/price/sku, then `recompute_receipt_status` |
+| `GET /api/products/search/?q=` | feeds the operator's manual product picker (the `MappingSheet` debounces it) |
+| `POST /api/sync/catalog/` | refreshes the catalog so missing products become mappable (admin: `IsAdmin`) |
 
 See also: [ARCHITECTURE.md](ARCHITECTURE.md) (system data flow & Receipt state
 machine) and [INTEGRATIONS.md](INTEGRATIONS.md) (SalesDrive YML parsing and the

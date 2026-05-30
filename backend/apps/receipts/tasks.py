@@ -34,6 +34,7 @@ from django.db import transaction
 from apps.mapping.models import ArticleMapping
 from apps.mapping.services import match_line
 from apps.receipts.models import Receipt, ReceiptLine
+from apps.receipts.services.status import recompute_receipt_status
 from integrations import gemini
 
 logger = logging.getLogger(__name__)
@@ -105,11 +106,10 @@ def recognize_receipt_task(receipt_id: int) -> None:
     receipt.save(update_fields=["status"])
 
     try:
-        # Gather the photographed pages. ReceiptPhoto stores URLs; fetching the
-        # bytes from storage (R2) is intentionally left as the integration point
-        # to wire when storage access is finalized. Until then OCR runs on an
-        # empty image list (and gemini.recognize_invoice returns []), keeping the
-        # pipeline runnable end-to-end without storage credentials.
+        # Gather the photographed pages by reading their bytes back from storage
+        # (Cloudflare R2 in prod, local MEDIA_ROOT in dev) via ``photo.image``.
+        # When no readable image is available, ``recognize_invoice`` short-circuits
+        # to ``[]``, keeping the pipeline runnable without storage/credentials.
         images: list[bytes] = _load_photo_bytes(receipt)
 
         ocr_lines = gemini.recognize_invoice(images)
@@ -148,16 +148,11 @@ def recognize_receipt_task(receipt_id: int) -> None:
                     raw_ocr_json=row,
                 )
 
-            # Final status: anything unmapped requires operator attention.
-            if not ocr_lines:
-                # No items recognized — treat as needing manual attention rather
-                # than a hard error, so the operator can review the photos.
-                receipt.status = "needs_mapping"
-            elif unmapped_count > 0:
-                receipt.status = "needs_mapping"
-            else:
-                receipt.status = "ready"
-            receipt.save(update_fields=["status"])
+            # Derive the final status from the freshly-created lines via the
+            # shared status-machine helper: ``ready`` only when every line is
+            # mapped, otherwise ``needs_mapping`` (including the no-lines case).
+            # Using the same recompute the views use keeps the rule in one place.
+            final_status = recompute_receipt_status(receipt)
 
         logger.info(
             "receipt_recognize_done",
@@ -165,7 +160,7 @@ def recognize_receipt_task(receipt_id: int) -> None:
                 "receipt_id": receipt_id,
                 "line_count": len(ocr_lines),
                 "unmapped": unmapped_count,
-                "status": receipt.status,
+                "status": final_status,
             },
         )
     except Exception as exc:  # noqa: BLE001 - we must record any failure
@@ -219,23 +214,55 @@ def _increment(field: str):
 def _load_photo_bytes(receipt: Receipt) -> list[bytes]:
     """Load the raw image bytes for every photo attached to a receipt.
 
-    Placeholder for the storage fetch: ``ReceiptPhoto.image_url`` points at the
-    stored image (Cloudflare R2 or local media). Wiring the actual download
-    requires finalized storage access; until then this returns an empty list so
-    the OCR call short-circuits cleanly and the whole pipeline remains runnable
-    without storage credentials.
+    Reads each :class:`~apps.receipts.models.ReceiptPhoto`'s ``image`` file back
+    from Django's default storage (Cloudflare R2 in production, local
+    ``MEDIA_ROOT`` in dev). Reading the file server-side — rather than fetching
+    the public ``image_url`` over HTTP — means the OCR worker needs no outbound
+    network access to storage and works even when the bucket is private.
+
+    A photo whose ``image`` is empty (e.g. created from a pre-uploaded
+    ``image_url`` only, or a missing object) is skipped with a warning rather than
+    aborting the whole run, so one bad page does not fail recognition of the rest.
 
     Args:
         receipt: The receipt whose photo bytes to load.
 
     Returns:
-        A list of image byte-strings, one per photo. Currently empty (stub).
+        A list of image byte-strings, one per readable photo. Empty when the
+        receipt has no photos with stored image files.
     """
 
-    urls = list(receipt.photos.values_list("image_url", flat=True))
+    images: list[bytes] = []
+    photos = list(receipt.photos.all())
+    for photo in photos:
+        image_field = photo.image
+        if not image_field:
+            # No stored file (URL-only photo, or never uploaded) — nothing to OCR.
+            logger.warning(
+                "receipt_photo_no_image",
+                extra={"receipt_id": receipt.pk, "photo_id": photo.pk},
+            )
+            continue
+        try:
+            with image_field.open("rb") as handle:
+                images.append(handle.read())
+        except (OSError, ValueError) as exc:  # storage miss / closed file
+            # Skip an unreadable page; recognition continues on the others.
+            logger.warning(
+                "receipt_photo_read_failed",
+                extra={
+                    "receipt_id": receipt.pk,
+                    "photo_id": photo.pk,
+                    "error": str(exc),
+                },
+            )
+
     logger.info(
         "receipt_photos_load",
-        extra={"receipt_id": receipt.pk, "photo_count": len(urls)},
+        extra={
+            "receipt_id": receipt.pk,
+            "photo_count": len(photos),
+            "loaded": len(images),
+        },
     )
-    # TODO: fetch each URL from storage (boto3 / requests) and return the bytes.
-    return []
+    return images

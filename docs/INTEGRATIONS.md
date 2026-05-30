@@ -16,8 +16,9 @@ be **verified against the live SalesDrive UI before production use**.
 | --- | --- |
 | [`backend/integrations/salesdrive.py`](../backend/integrations/salesdrive.py) | Fetch + parse SalesDrive YML catalog |
 | [`backend/apps/catalog/services.py`](../backend/apps/catalog/services.py) | Upsert parsed offers into `OurProduct` |
-| [`backend/apps/receipts/services/xlsx.py`](../backend/apps/receipts/services/xlsx.py) | Build the receipt `.xlsx` for SalesDrive import |
-| [`backend/integrations/gemini.py`](../backend/integrations/gemini.py) | Gemini Vision OCR of invoice photos |
+| [`backend/apps/catalog/management/commands/sync_catalog.py`](../backend/apps/catalog/management/commands/sync_catalog.py) | CLI catalog sync (`manage.py sync_catalog`) |
+| [`backend/apps/receipts/services/xlsx.py`](../backend/apps/receipts/services/xlsx.py) | Build the receipt `.xlsx` for SalesDrive import (group + weighted price) |
+| [`backend/integrations/gemini.py`](../backend/integrations/gemini.py) | Gemini Vision OCR of invoice photos (real `google-genai` call) |
 
 ---
 
@@ -126,17 +127,22 @@ default — sufficient hardening for a trusted account export.
 - Returns the number of products synced and logs `catalog_sync_start` /
   `catalog_sync_done` (with `synced` / `created` / `updated` counts).
 
-It is invoked from three places without duplicating logic:
+It is invoked from four places without duplicating logic:
 
 ```mermaid
 flowchart LR
-    A["POST /api/sync/catalog/<br/>(admin only)"] --> S
-    B["Celery beat<br/>(daily)"] --> S
+    A["POST /api/sync/catalog/<br/>(admin: IsAdmin)"] --> S
+    B["Celery beat<br/>(daily 03:00)"] --> S
+    D["manage.py sync_catalog<br/>(CLI / cron)"] --> S
     C["tests"] --> S
     S["sync_catalog(yml_url)"] --> F["fetch_catalog_yml"]
     F --> P["parse_catalog_yml"]
     P --> U["update_or_create<br/>OurProduct (by salesdrive_id)"]
 ```
+
+The API endpoint and the Celery beat go through the async `sync_catalog_task`
+(`apps.catalog.tasks`); the CLI command and tests call `sync_catalog` directly
+(synchronously). All four converge on the same idempotent upsert.
 
 ### 1.4 Receipt import (manual step)
 
@@ -152,27 +158,49 @@ average cost are mutated. Valeraup's job ends at producing a correct file.
 #### The four-column format
 
 `apps.receipts.services.xlsx.build_receipt_xlsx(receipt)` produces a single-sheet
-workbook (sheet title `Надходження`) with a header row plus one row per **matched**
-line:
+workbook (sheet title `Надходження`) with a header row plus **one row per distinct
+matched product**:
 
 | Column header (`COLUMN_HEADERS`) | Source field |
 | --- | --- |
-| `SKU/Артикул` | `line.matched_product.sku` |
-| `Назва` | `line.matched_product.name` |
-| `Кількість` | `line.quantity` (Decimal, 3 dp) |
-| `Ціна (собівартість)` | `line.price` — purchase cost, Decimal, 2 dp |
+| `SKU/Артикул` | `matched_product.sku` |
+| `Назва` | `matched_product.name` |
+| `Кількість` | summed `line.quantity` (Decimal, 3 dp) |
+| `Ціна (собівартість)` | quantity-weighted avg price (Decimal, 2 dp) |
 
 Implementation notes:
+
+- **Lines are grouped by `matched_product`.** OCR can split one catalog product
+  across several invoice lines (a multi-page invoice, the same article listed
+  twice), and two different supplier SKUs can map to the same `OurProduct`.
+  SalesDrive's importer expects one row per product, so duplicates are merged: the
+  group's quantities are **summed**, and the price is the **quantity-weighted
+  average** `Σ(qty·price) / Σ(qty)` (`_weighted_price`), which preserves the total
+  receipt cost `Σ qty·price` exactly through the merge. Rows appear in first-seen
+  order (dict insertion order) for a predictable, reviewable file.
+
+  > **OPEN QUESTION (ТЗ §16):** the business may instead prefer *last* price (most
+  > recent purchase) or *min* price (most conservative cost). Quantity-weighted
+  > average is the cost-preserving default. If the SalesDrive workflow dictates
+  > otherwise, change `_weighted_price` and update this doc + `test_xlsx.py`
+  > together (the `# TODO(ТЗ §16)` in `xlsx.py` marks the spot).
+
+  Edge cases in `_weighted_price`: a group whose total quantity is 0 falls back to
+  the plain mean of the available prices; a group where OCR read **no** price
+  leaves the cell blank (`None`) for the operator to fill in SalesDrive.
 
 - **Only matched lines are written.** A line with no `matched_product` has no
   SalesDrive SKU to import against, so it is skipped and counted in `rows_skipped`.
   In normal flow this never triggers, because the receipt only reaches `ready`
   once every line is mapped — the skip is defensive.
-- `Decimal` values are written **as-is**; openpyxl serializes them to exact
-  numeric cells, preserving quantity (3 dp) and price (2 dp) precision with no
-  float rounding.
+- `Decimal` values are written **as-is** (the merged quantity/price are quantized
+  to 3 dp / 2 dp); openpyxl serializes them to exact numeric cells with no float
+  rounding.
 - The function logs `receipt_xlsx_built` with `rows_written`, `rows_skipped` and
-  byte size. It returns `bytes`, ready to upload to R2 or stream as a download.
+  byte size. It returns `bytes`, written to `default_storage` at
+  `receipts/xlsx/<id>.xlsx` (R2 in prod, filesystem in dev) by
+  `ReceiptGenerateXlsxView`, which then records `xlsx_url` and flips the receipt to
+  `xlsx_ready`.
 
 > **VERIFY before production:** the exact header strings, their order, the sheet
 > title, and whether SalesDrive's importer expects an inclusive-of-VAT or
@@ -262,10 +290,15 @@ Step by step (`recognize_invoice(images, *, model=None)`):
 1. **Skip guards.** If `images` is empty, or `settings.GEMINI_API_KEY` is unset
    (local/dev/CI without a key), it logs `gemini_recognize_skip` and returns `[]`
    — the pipeline and test suite run with no network access or secrets.
-2. **Call.** `_call_gemini()` builds a multimodal request: the system prompt
-   followed by each page as an inline `image/jpeg` part, then
-   `client.models.generate_content(...)`. It raises `RuntimeError` if the
-   `google-genai` SDK is not installed.
+2. **Call.** `_call_gemini()` makes the **real `google-genai` call**: it imports
+   the SDK **lazily** (`from google import genai` / `from google.genai import
+   types`) so the module never fails to import when the package is absent, builds
+   `client = genai.Client(api_key=settings.GEMINI_API_KEY)`, assembles a multimodal
+   request — the `SYSTEM_PROMPT` followed by each page as
+   `types.Part.from_bytes(data=img, mime_type="image/jpeg")` — and calls
+   `client.models.generate_content(model=settings.GEMINI_MODEL, contents=parts)`,
+   returning `response.text`. It raises `RuntimeError` if the `google-genai` SDK is
+   not installed.
 3. **Fence strip.** `_strip_code_fences()` removes a leading/trailing
    ```` ```json ``` ```` (or bare ```` ``` ````) fence and trims whitespace.
 4. **Parse.** `json.loads`, then assert the result is a `list`; non-dict
@@ -311,13 +344,18 @@ without having to re-run OCR or dig through logs.
 `recognize_invoice` is called from the Celery task
 `apps.receipts.tasks.recognize_receipt_task`, which:
 
-1. loads the receipt's photos,
-2. calls `gemini.recognize_invoice(images)`,
-3. creates `ReceiptLine` rows (storing each raw dict in `raw_ocr_json`),
+1. loads the receipt's photo **bytes** back from `default_storage` server-side
+   (`photo.image.open('rb')` — no public URL needed, so a private R2 bucket
+   works; unreadable/URL-only photos are skipped with a warning),
+2. calls `gemini.recognize_invoice(images)` (returns `[]` when the API key is
+   unset or there are no images — offline-safe),
+3. deletes any prior lines (idempotency) and creates `ReceiptLine` rows inside a
+   transaction (storing each raw dict in `raw_ocr_json`; quantity/price parsed
+   with a comma→dot tolerant `_to_decimal`),
 4. runs `apps.mapping.services.match_line` per line (see
-   [docs/MAPPING.md](./MAPPING.md)),
-5. transitions `Receipt.status` (`recognizing → needs_mapping` / `ready` /
-   `error`).
+   [docs/MAPPING.md](./MAPPING.md)) and bumps `times_used` on auto-matches,
+5. transitions `Receipt.status` via `recompute_receipt_status`
+   (`recognizing → needs_mapping` / `ready`), or `error` on any failure.
 
 See [docs/ARCHITECTURE.md](./ARCHITECTURE.md) for the full
 photo → OCR → mapping → Excel → SalesDrive flow and the receipt state diagram.

@@ -38,6 +38,14 @@ boto3>=1.34,<2
 gunicorn>=23,<24
 Pillow>=10,<12
 
+# --- Static file serving (production) ---------------------------------------
+# WhiteNoise lets gunicorn serve the collected Django static assets (admin CSS,
+# drf-spectacular Swagger UI) directly, with compression + far-future cache
+# headers, so the prod stack needs no separate static web server for /static/.
+# User-uploaded media still goes to R2 (or MEDIA_ROOT in dev) — WhiteNoise only
+# serves STATIC_ROOT.
+whitenoise>=6.6,<7
+
 # --- Structured logging -----------------------------------------------------
 python-json-logger>=2.0,<4
 

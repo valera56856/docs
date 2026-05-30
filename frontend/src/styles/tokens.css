@@ -7,6 +7,17 @@
  *
  * Palette: navy (#0A1A3F) -> electric blue (#2563EB) -> cyan (#06B6D4),
  * with a neutral slate ramp and Inter as the brand typeface.
+ *
+ * THEMING (Liquid Glass 2026):
+ * - `:root` holds the LIGHT theme. `[data-theme='dark']` overrides the SAME
+ *   variable names with a navy-forward dark palette (set by ThemeProvider on
+ *   `documentElement`). Components read variables only — never hard-coded
+ *   colors — so switching the attribute reskins the whole app with no JS in the
+ *   component tree. Both themes meet WCAG AA contrast for text on surfaces.
+ * - The `--surface-glass*` / `--glass-*` tokens describe the frosted, gradient
+ *   "liquid glass" treatment used by `Card` (translucent surface + backdrop
+ *   blur + a soft accent gradient + a hairline border). They are tuned per
+ *   theme so the glass reads correctly on both a light and a dark backdrop.
  */
 :root {
   /* ---- Brand: navy -> electric blue -> cyan ---- */
@@ -78,4 +89,95 @@
   --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.4);
   /* Minimum touch target per WCAG 2.5.5 — mobile is the primary surface. */
   --touch-target-min: 44px;
+
+  /* ---- Liquid Glass 2026 (light) ----
+   * A frosted, translucent card surface: a semi-opaque white wash over the app
+   * background, blurred behind, with a faint navy->cyan accent gradient and a
+   * crisp hairline border. Kept as tokens so Card (and any future glass
+   * surface) reskins per-theme without touching component classes. */
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --surface-glass-border: rgba(10, 26, 63, 0.08);
+  --glass-blur: 14px;
+  --glass-saturate: 140%;
+  --glass-shadow: 0 8px 28px rgba(10, 26, 63, 0.1);
+  --glass-gradient: linear-gradient(
+    135deg,
+    rgba(37, 99, 235, 0.06) 0%,
+    rgba(6, 182, 212, 0.05) 100%
+  );
+  --glass-highlight: rgba(255, 255, 255, 0.6);
+
+  /* ---- Theme transition ----
+   * Surfaces ease between light/dark on toggle (suppressed under
+   * prefers-reduced-motion by global.css). */
+  --theme-transition: background-color 200ms ease, color 200ms ease,
+    border-color 200ms ease;
+
+  /* The active color scheme — lets the UA paint form controls / scrollbars to
+   * match the theme. Updated by the dark override below. */
+  color-scheme: light;
+}
+
+/*
+ * Dark theme — navy-forward surfaces tuned for the warehouse-at-night case.
+ *
+ * Overrides the SAME variable names as `:root`. ThemeProvider sets
+ * `data-theme="dark"` on <html>; everything downstream just reads the vars.
+ * Contrast targets: body text (#e6edf7) on the app bg (#070d1c) ≈ 15:1, and on
+ * the elevated surface (#0f1d3d) ≈ 12:1 — comfortably past WCAG AA.
+ */
+[data-theme='dark'] {
+  /* ---- Brand: brightened a touch so it stays vivid on dark surfaces ---- */
+  --color-navy: #0a1a3f;
+  --color-navy-700: #1b2f5e;
+  --color-blue: #3b82f6;
+  --color-blue-600: #2563eb;
+  --color-blue-400: #60a5fa;
+  --color-cyan: #22d3ee;
+  --color-cyan-400: #67e8f9;
+
+  /* ---- Neutrals (dark slate / navy ramp) ---- */
+  --color-white: #ffffff;
+  --color-bg: #070d1c; /* app background — deep navy-black */
+  --color-surface: #0f1d3d; /* cards, sheets — elevated navy */
+  --color-surface-muted: #16264c;
+  --color-border: #243a66;
+  --color-text: #e6edf7; /* primary text */
+  --color-text-muted: #94a7c7; /* secondary text */
+  --color-text-inverse: #f8fafc; /* text on blue/cyan fills */
+
+  /* ---- Semantic / status: lift bg toward dark, brighten fg for contrast ---- */
+  --color-success: #4ade80;
+  --color-success-bg: #0e2e1c;
+  --color-warning: #fbbf24;
+  --color-warning-bg: #3a2b08;
+  --color-danger: #f87171;
+  --color-danger-bg: #3a1413;
+  --color-info: var(--color-blue);
+  --color-info-bg: #122a52;
+
+  /* ---- Elevation: stronger, cooler shadows read better on dark ---- */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.55);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+
+  /* ---- Interaction ---- */
+  --focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.5);
+
+  /* ---- Liquid Glass 2026 (dark) ----
+   * On dark, the glass is a translucent navy wash with a brighter hairline so
+   * the card edge stays legible, plus a slightly stronger accent gradient. */
+  --surface-glass: rgba(15, 29, 61, 0.6);
+  --surface-glass-border: rgba(148, 167, 199, 0.16);
+  --glass-blur: 16px;
+  --glass-saturate: 130%;
+  --glass-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --glass-gradient: linear-gradient(
+    135deg,
+    rgba(59, 130, 246, 0.12) 0%,
+    rgba(34, 211, 238, 0.08) 100%
+  );
+  --glass-highlight: rgba(148, 167, 199, 0.12);
+
+  color-scheme: dark;
 }

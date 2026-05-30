@@ -99,9 +99,16 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 # ---------------------------------------------------------------------------
 # corsheaders must sit high in the stack (before CommonMiddleware) so it can
 # attach CORS headers to every response, including errors.
+#
+# WhiteNoise sits immediately AFTER SecurityMiddleware (its documented required
+# position) so that in production gunicorn can serve the collected static assets
+# (Django admin, Swagger UI) itself — compressed, with far-future cache headers —
+# without a separate static web server. It is a no-op in dev: `runserver` serves
+# static via staticfiles, and WhiteNoise only intercepts paths under STATIC_URL.
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -186,7 +193,11 @@ USE_TZ = True
 # ---------------------------------------------------------------------------
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-MEDIA_URL = "media/"
+# Leading slash is required so ``FileSystemStorage.url()`` returns a root-relative
+# URL (``/media/receipts/...``) that the frontend and dev media-serving route can
+# resolve regardless of the current request path. ``MEDIA_ROOT`` is where uploaded
+# receipt photos and generated .xlsx files land when R2 is not configured.
+MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
 
 # ---------------------------------------------------------------------------
@@ -222,8 +233,12 @@ if _R2_ENABLED:
                 "signature_version": "s3v4",
             },
         },
+        # WhiteNoise compressed-manifest storage: collectstatic produces gzipped
+        # copies and a content-hashed manifest so WhiteNoise (in MIDDLEWARE) can
+        # serve /static/ with immutable far-future caching. User uploads (media)
+        # still go to R2 via the ``default`` backend above.
         "staticfiles": {
-            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
         },
     }
 else:
@@ -231,8 +246,12 @@ else:
         "default": {
             "BACKEND": "django.core.files.storage.FileSystemStorage",
         },
+        # Same WhiteNoise static backend in the no-R2 (local/dev) case. In dev
+        # `runserver` bypasses this via the staticfiles app, but keeping it here
+        # means a prod-like container built from this code serves static via
+        # WhiteNoise regardless of whether R2 media storage is configured.
         "staticfiles": {
-            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage",
+            "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
         },
     }
 

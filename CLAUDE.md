@@ -22,7 +22,9 @@ Absolute root: `/Users/nextcrm/Desktop/Projects/valeraup`
 valeraup/
 ├── CLAUDE.md                  ← you are here (engineering standards)
 ├── README.md                  ← what/why, setup, local start, tests, deploy
-├── docker-compose.yml         ← 5 services: db, redis, backend, worker, frontend
+├── docker-compose.yml         ← DEV: 5 services (db, redis, backend, worker+beat -B, frontend)
+├── docker-compose.prod.yml    ← PROD: db, redis, backend(gunicorn), worker, beat (split), frontend(nginx)
+├── .env.prod.example          ← prod env template (never commit .env.prod)
 ├── .gitignore  .dockerignore
 ├── .github/workflows/ci.yml   ← backend (check + pytest) + frontend (tsc + build) jobs
 │
@@ -33,36 +35,48 @@ valeraup/
 │
 ├── backend/
 │   ├── manage.py              ← sets DJANGO_SETTINGS_MODULE=valeraup.settings
-│   ├── requirements.txt       ← pinned deps (incl. dev/test under a comment)
+│   ├── requirements.txt       ← pinned deps (+ Pillow, whitenoise; dev/test under a comment)
 │   ├── pytest.ini             ← DJANGO_SETTINGS_MODULE=valeraup.settings
 │   ├── conftest.py            ← shared pytest fixtures
-│   ├── Dockerfile             ← python:3.12-slim
+│   ├── Dockerfile             ← python:3.12-slim; CMD = entrypoint.sh
+│   ├── entrypoint.sh          ← prod boot: migrate → collectstatic → exec gunicorn
 │   ├── .env.example           ← safe placeholders, never real keys
 │   ├── valeraup/              ← project package
 │   │   ├── settings.py  urls.py  celery.py  __init__.py (imports celery_app)
 │   │   └── wsgi.py  asgi.py
 │   ├── integrations/          ← external boundaries (NOT Django apps)
-│   │   ├── gemini.py          ← recognize_invoice(), SYSTEM_PROMPT
-│   │   └── salesdrive.py      ← fetch_catalog_yml(), parse_catalog_yml()
+│   │   ├── gemini.py          ← recognize_invoice() (real google-genai call), SYSTEM_PROMPT
+│   │   └── salesdrive.py      ← fetch_catalog_yml(), parse_catalog_yml() (namespace-tolerant)
 │   ├── apps/                  ← the 5 domain apps (AppConfig.name = "apps.<x>")
-│   │   ├── accounts/          ← Profile (role, pin_hash); auth views (login/refresh/pin)
+│   │   ├── accounts/          ← Profile (role, pin_hash); auth (login/refresh/pin/me/set-pin)
+│   │   │   ├── signals.py     ← post_save → auto Profile(role='operator')
+│   │   │   └── permissions.py ← IsAdmin / IsOperatorOrAdmin (keyed on profile.role)
 │   │   ├── suppliers/         ← Supplier
 │   │   ├── catalog/           ← OurProduct + services.sync_catalog + tasks
+│   │   │   └── management/commands/sync_catalog.py ← CLI catalog sync
 │   │   ├── mapping/           ← ArticleMapping + services (normalize/match/remember)
-│   │   └── receipts/          ← Receipt/ReceiptPhoto/ReceiptLine + services/xlsx + tasks
-│   └── tests/                 ← test_mapping, test_xlsx, test_models, test_api_smoke
+│   │   └── receipts/          ← Receipt/ReceiptPhoto(image+image_url)/ReceiptLine
+│   │       ├── services/xlsx.py   ← build_receipt_xlsx (4 cols, group + weighted price)
+│   │       ├── services/status.py ← recompute_receipt_status / set_receipt_status
+│   │       └── tasks.py           ← recognize_receipt_task (reads photo bytes from storage)
+│   └── tests/                 ← test_accounts, test_catalog, test_mapping, test_receipts,
+│                                 test_upload, test_xlsx, test_models, test_api_smoke
 │
 └── frontend/                  ← React 19 + Vite + TS PWA + Capacitor + Storybook
     ├── package.json  vite.config.ts  tsconfig*.json  capacitor.config.ts
     ├── index.html  nginx.conf  Dockerfile  .env.example
     ├── public/                ← manifest.webmanifest, robots.txt, icons/
-    ├── .storybook/            ← main.ts, preview.ts (imports tokens.css)
+    ├── .storybook/            ← main.ts, preview.ts (light/dark theme toolbar; imports tokens.css)
     └── src/
         ├── main.tsx  App.tsx  router.tsx  vite-env.d.ts
-        ├── styles/            ← tokens.css (NextCRM palette), global.css
-        ├── lib/               ← cn.ts, api.ts (JWT fetch), auth.tsx (AuthProvider)
-        ├── types/index.ts     ← mirrors backend models
-        ├── components/        ← ui/Button, ui/StatusBadge, MappingSheet
+        ├── styles/            ← tokens.css (light + [data-theme='dark'] + glass), global.css
+        ├── lib/               ← cn.ts, api.ts (JWT fetch + postForm), auth.tsx, camera.ts, useTheme.ts
+        ├── types/index.ts     ← mirrors backend models + request/response shapes
+        ├── components/
+        │   ├── ThemeProvider.tsx  ← theme context + ThemeToggle (Sun/Moon)
+        │   ├── ui/            ← Button, Input, Card, Sheet, Spinner, Skeleton, EmptyState,
+        │   │                     Toast/Toaster/useToast, StatusBadge (+ *.stories.tsx)
+        │   └── MappingSheet.tsx   ← bottom-sheet (Radix Dialog) for manual mapping
         └── pages/             ← Login, Suppliers, Camera, ReceiptTable, Generate, Admin
 ```
 
@@ -73,8 +87,16 @@ valeraup/
   `name="apps.<x>"` and `default_auto_field="django.db.models.BigAutoField"`.
 - `integrations/` is a **plain Python package, not a Django app** — it is the
   single boundary to Gemini and SalesDrive. Keep external HTTP/SDK calls there.
-- Migration files are **generated** (`makemigrations`), not hand-written. Only
-  `migrations/__init__.py` is committed in the skeleton.
+- Migration files are **generated** (`makemigrations`), not hand-written, and **are
+  committed** (`apps/<x>/migrations/0001_initial.py`). `entrypoint.sh` / the compose
+  boot run `migrate` only — the schema is reproducible from the committed migrations,
+  so no `makemigrations` is needed on deploy. When you change a model, run
+  `makemigrations` and commit the new migration in the same PR.
+- **Authorization is role-based** via `apps.accounts.permissions.IsAdmin` /
+  `IsOperatorOrAdmin` (keyed on `Profile.role`), **not** Django's `IsAdminUser`
+  (`is_staff`). A `post_save` signal (`apps.accounts.signals.ensure_profile`,
+  wired in `AccountsConfig.ready()`) guarantees every user has exactly one
+  `Profile(role='operator')`.
 
 ---
 
@@ -141,10 +163,19 @@ These are already followed throughout `backend/` — match the existing style.
   endpoint requires authentication** — do not silently open one up. Use
   `@extend_schema` to keep the OpenAPI accurate where DRF can't infer it.
 - **PINs and passwords are hashed** with Django's `make_password` /
-  `check_password` (`Profile.pin_hash`). Never store or log a raw PIN.
+  `check_password` (`Profile.pin_hash`). Never store or log a raw PIN. The caller
+  sets their own PIN via `POST /api/auth/set-pin/` (authenticated).
 - **`OurProduct.salesdrive_id` is the upsert key** for catalog sync;
   `ArticleMapping` is unique on `(supplier, supplier_sku_normalized)`. Respect
   those constraints rather than working around them.
+- **Media goes through `default_storage`.** `ReceiptPhoto.image`
+  (`ImageField(upload_to='receipts/%Y/%m/')`) saves the uploaded file via Django's
+  default storage — Cloudflare R2 when the `R2_*` env vars are set, else
+  `FileSystemStorage` under `MEDIA_ROOT`. `image_url` is mirrored from
+  `image.url` for the frontend. The OCR task reads the bytes back server-side
+  (`photo.image.open('rb')`), so it needs no public URL. Generated `.xlsx` is
+  likewise written to `default_storage` (`receipts/xlsx/<id>.xlsx`). `Pillow` backs
+  `ImageField`; `whitenoise` serves collected `/static/` in prod.
 
 ---
 
@@ -159,13 +190,32 @@ These are already followed throughout `backend/` — match the existing style.
   cyan `#06B6D4`, Inter font). A comment marks that this file will be replaced by
   the real `@nextcrm/tokens` package later — do **not** add that package to
   `package.json` yet (it is private/unpublished).
+- **Theming (light/dark).** `:root` holds the light tokens; `[data-theme='dark']`
+  overrides the **same** variable names. `ThemeProvider` (`components/ThemeProvider.tsx`)
+  sets `data-theme` on `<html>`, persists the choice in `localStorage`
+  (`valeraup.theme`), and follows `prefers-color-scheme` until the user toggles
+  via `ThemeToggle`. There are also `--surface-glass*` / `--glass-*` tokens for the
+  "Liquid Glass 2026" `Card` surface. Read variables only — never hard-code colors
+  — so a theme switch reskins the whole app.
+- **UI kit** (`components/ui/`, each with TSDoc + typed props + a `*.stories.tsx`):
+  `Button`, `Input`, `Card`, `Sheet` (Radix Dialog bottom-sheet), `Spinner`,
+  `Skeleton`, `EmptyState`, `Toast`/`Toaster`/`useToast`, `StatusBadge`. 44px touch
+  floor; WCAG contrast in both themes.
 - **Accessibility:** status is never conveyed by color alone — `StatusBadge`
   pairs an icon + text with color (WCAG). Keep that pattern.
 - **Auth token handling:** access token lives in memory; refresh token is noted
   for Capacitor Secure Storage. `src/lib/api.ts` is the single fetch wrapper
-  (JWT attach + refresh), base URL from `import.meta.env.VITE_API_BASE_URL`.
-- **Skeleton/empty/error states** are first-class — page stubs already note
-  them; fill them in rather than rendering nothing on load/empty/failure.
+  (JWT attach + refresh), base URL from `import.meta.env.VITE_API_BASE_URL`. File
+  uploads go through `api.postForm` / `receipts.uploadPhoto` as multipart
+  `FormData` — **never** set a JSON `Content-Type` on those (the browser must add
+  the multipart boundary).
+- **Camera** (`lib/camera.ts`): `capturePhoto()` uses `@capacitor/camera` on native
+  and a hidden `<input type="file" accept="image/*" capture="environment">` on web,
+  returning a `File`.
+- **Skeleton/empty/error states** are first-class — the pages render real
+  `Skeleton` / `EmptyState` / error `Toast` states (e.g. `ReceiptTablePage` polls
+  every ~2s while `recognizing` with a skeleton) rather than nothing on
+  load/empty/failure.
 
 ---
 
@@ -209,9 +259,13 @@ snake_case event name as the message. The existing events to match and extend:
 | OCR parse failure   | `gemini_recognize_parse_error` / `gemini_recognize_failed` | `model`, `attempt`, `error` |
 | Mapping auto-hit    | `mapping_match_auto`        | `supplier_id`, `normalized_sku`, `our_product_id` |
 | Mapping miss        | `mapping_match_miss`        | `supplier_id`, `normalized_sku`             |
-| Mapping learned     | `mapping_remembered`        | `supplier_id`, `our_product_id`, `times_used`, `created` |
+| Mapping learned     | `mapping_remembered`        | `supplier_id`, `our_product_id`, `times_used`, `was_created` |
 | Excel built         | `receipt_xlsx_built`        | `receipt_id`, `rows_written`, `rows_skipped`, `bytes` |
 | Recognize lifecycle | `receipt_recognize_*`       | `receipt_id`, `line_count`, `status`        |
+| Photo uploaded      | `receipt_photo_uploaded`    | `receipt_id`, `photo_id`, `image_url`       |
+| Status change       | `receipt_status_set` / `receipt_status_recomputed` | `receipt_id`, `previous_status`, `status` |
+| Profile auto-create | `profile_auto_created`      | `user_id`, `role`                           |
+| PIN set / login     | `pin_set` / `pin_login_*`   | `user_id` (**never** the PIN value)         |
 
 **Never log secrets or raw PINs.** `raw_ocr_json` is stored on the line for
 audit, but do not dump full image bytes into logs.
@@ -240,12 +294,26 @@ idempotent. If it can't be, say so loudly and explain why.
 
 ## 8. Receipt status machine
 
-`Receipt.status` is the spine of the workflow. Valid transitions
-(see `docs/ARCHITECTURE.md` for the state diagram):
+`Receipt.status` is the spine of the workflow. The two operations that move it
+live in **`apps/receipts/services/status.py`** so the rule has one home:
+
+- **`recompute_receipt_status(receipt)`** — derives the *data-driven* status from
+  the current lines: no lines or any line lacking a `matched_product` →
+  `needs_mapping`; every line matched → `ready`. It **never** auto-downgrades a
+  terminal/explicit state (`xlsx_ready` / `error`). Called after every line
+  `PATCH` and every `map/`, so `needs_mapping → ready` flips **automatically** the
+  moment the last line is mapped (this is wired now, not a future TODO).
+- **`set_receipt_status(receipt, status)`** — applies an *explicit* transition
+  (e.g. a view flipping to `recognizing` or `xlsx_ready`), validating it against
+  the allow-list and logging it; `error` is reachable from any state.
+
+Valid transitions (see `docs/ARCHITECTURE.md` for the state diagram):
 
 ```
 draft → recognizing → needs_mapping → ready → xlsx_ready
                     ↘ ready (if every line auto-matched)
+   needs_mapping/ready ⇄ (re-recognise) → recognizing
+   xlsx_ready → recognizing (re-open) ;  error → recognizing (retry)
    any step ───────────────────────────────────────────→ error
 ```
 
@@ -268,10 +336,19 @@ is a one-line change:
 
 | Column                | Source                          |
 |-----------------------|---------------------------------|
-| `SKU/Артикул`         | `line.matched_product.sku`      |
-| `Назва`               | `line.matched_product.name`     |
-| `Кількість`           | `line.quantity` (3 dp)          |
-| `Ціна (собівартість)` | `line.price` (purchase cost, 2 dp) |
+| `SKU/Артикул`         | `matched_product.sku`           |
+| `Назва`               | `matched_product.name`          |
+| `Кількість`           | summed `line.quantity` (3 dp)   |
+| `Ціна (собівартість)` | quantity-weighted avg price (2 dp) |
+
+**Lines are grouped by `matched_product`** (skipping unmapped): duplicates of one
+product are merged into a single row, **quantities summed**, and the price set to
+the **quantity-weighted average** `Σ(qty·price) / Σ(qty)` so total receipt cost is
+preserved through the merge (`_weighted_price`). This is the cost-preserving
+default; the business may instead want *last* or *min* price — that is an **open
+question (ТЗ §16)** flagged with a `TODO` in `services/xlsx.py`. If the rule
+changes, update `_weighted_price`, `docs/INTEGRATIONS.md`, and `test_xlsx.py`
+together.
 
 **Before production, verify these headers/order against the live SalesDrive
 import template** and update `docs/INTEGRATIONS.md`. The catalog itself comes
@@ -286,9 +363,19 @@ Tests live in `backend/tests/` and run under `pytest` + `pytest-django`
 (`pytest.ini` sets `DJANGO_SETTINGS_MODULE=valeraup.settings`). Tests describe
 behavior and form the Definition of Done:
 
-- `test_mapping.py` — `normalize_sku` cases + auto-match after
-  `remember_mapping`.
-- `test_xlsx.py` — `build_receipt_xlsx` emits the 4 columns with correct values.
+- `test_accounts.py` — profile auto-created on user create; `set-pin` then PIN
+  login round-trips; `me` returns `{email, role, has_pin}`; `IsAdmin` blocks an
+  operator on a protected view.
+- `test_catalog.py` — parse a small sample YML string; sync upserts idempotently;
+  product search by sku/name.
+- `test_mapping.py` — `normalize_sku` cases (incl. Cyrillic), per-supplier
+  isolation, operator correction, and auto-match after `remember_mapping`.
+- `test_receipts.py` — create draft; `recompute_receipt_status` transitions; line
+  `PATCH`; map flow sets `manual` + recompute.
+- `test_upload.py` — photo upload creates a `ReceiptPhoto` with an `image`;
+  recognize with `GEMINI_API_KEY` unset → lines empty, status sensible.
+- `test_xlsx.py` — `build_receipt_xlsx` emits 4 columns; duplicate lines mapped to
+  the same product → ONE row, summed quantity, weighted price.
 - `test_models.py` — model creation, `unique_together`, `Receipt` status default.
 - `test_api_smoke.py` — schema endpoint returns 200; `/api/suppliers/` returns
   401 without auth.
@@ -353,11 +440,15 @@ Reviewers should be able to reconstruct your reasoning without reading your mind
 - **Do not** log secrets, raw PINs, or full image bytes.
 - **Do not** open a non-auth endpoint without an explicit, justified reason.
 - **Do not** add `@nextcrm/tokens` to `package.json` (unpublished) — use
-  `src/styles/tokens.css`.
+  `src/styles/tokens.css`. The only frontend dependency added beyond the skeleton
+  is `@radix-ui/react-dialog` (powers the `Sheet` / `MappingSheet` primitive).
 - **Do not** use floats for money or quantities — `Decimal` only.
 - **Do not** delete the DB or media volumes on redeploy — `docker compose build`
-  + `up`, never `down -v`. (Worker embeds Celery beat for dev only; split it in
-  production.)
+  + `up`, never `down -v`. The dev worker embeds Celery beat (`-B`); production
+  (`docker-compose.prod.yml`) runs beat as its **own** `beat` service so the
+  schedule has a single owner.
+- **Do not** edit the dev `docker-compose.yml` for prod changes — prod has its own
+  `docker-compose.prod.yml`.
 
 ---
 
