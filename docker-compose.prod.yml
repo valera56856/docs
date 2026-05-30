@@ -150,20 +150,45 @@ services:
     configs:
       - source: frontend_proxy
         target: /etc/nginx/conf.d/default.conf
-    ports:
-      - "80:80"
+    # No host port — the caddy service (below) owns 80/443, terminates TLS, and
+    # reverse-proxies to this container as `frontend:80` on the compose network.
+    expose:
+      - "80"
     depends_on:
       backend:
         condition: service_healthy
 
+  # ── TLS reverse proxy ──────────────────────────────────────────────────────
+  # Caddy terminates HTTPS on 80/443 and reverse-proxies to the frontend nginx.
+  # It auto-obtains + renews a Let's Encrypt cert for ${DOMAIN} (which must
+  # resolve to this host with 80/443 reachable). Plain http on the bare IP is
+  # also proxied — a public CA cannot issue a certificate for a raw IP.
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
 # ---------------------------------------------------------------------------
 # Named volumes — MUST persist across redeploys. Never `docker compose down -v`.
-#   pgdata — PostgreSQL data directory (all app data).
-#   media  — uploaded receipt photos + generated .xlsx (only used when R2 is off).
+#   pgdata      — PostgreSQL data directory (all app data).
+#   media       — uploaded receipt photos + generated .xlsx (only when R2 off).
+#   caddy_data  — Let's Encrypt certs/keys; MUST persist (re-issue hits LE limits).
 # ---------------------------------------------------------------------------
 volumes:
   pgdata:
   media:
+  caddy_data:
+  caddy_config:
 
 # ---------------------------------------------------------------------------
 # Inline nginx reverse-proxy config for the frontend container. Defined here
@@ -252,4 +277,16 @@ configs:
               add_header Cache-Control "no-cache";
               try_files $$uri $$uri/ /index.html;
           }
+      }
+
+  # Caddy site config. Compose substitutes ${DOMAIN} / ${SERVER_IP} at render
+  # time, so the literal values are baked in. Caddy auto-manages the TLS cert for
+  # the domain (HTTP→HTTPS redirect included); the bare IP is plain http only.
+  caddyfile:
+    content: |
+      ${DOMAIN} {
+          reverse_proxy frontend:80
+      }
+      http://${SERVER_IP} {
+          reverse_proxy frontend:80
       }
