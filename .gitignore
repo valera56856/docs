@@ -32,6 +32,9 @@ ENV/
 staticfiles/
 media/
 local_settings.py
+# Celery beat schedule (written by the embedded `-B` worker in dev)
+celerybeat-schedule*
+celerybeat.pid
 
 # Test / coverage caches
 .pytest_cache/
@@ -77,3 +80,4 @@ Thumbs.db
 *.swp
 *.swo
 *~
+.gstack/
