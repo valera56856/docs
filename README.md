@@ -413,6 +413,7 @@ npm run build-storybook
 ## Подальша документація
 
 - [`CLAUDE.md`](CLAUDE.md) — інженерні стандарти: docstrings + типи, пояснення «WHY», структуроване JSON-логування, ідемпотентність, Definition of Done (docs ✓ / tests ✓ / OpenAPI ✓).
+- [`docs/STATUS.md`](docs/STATUS.md) — **статус проєкту й roadmap**: що зроблено (Story 1–13), як верифіковано, і що далі (креди, звірка Excel-шаблону, деплой, Capacitor).
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — компоненти, повний PWA-потік (suppliers → camera → table → mapping → generate), завантаження медіа, `recompute_receipt_status`, прод-деплой, Mermaid-діаграми (flowchart + stateDiagram статусів `Receipt`).
 - [`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) — SalesDrive (YML-експорт, формат Excel-імпорту з групуванням і зваженою ціною (ТЗ §16), ручний крок) і Gemini (реальний `google-genai` виклик, системний промпт, fence-strip + retry, аудит `raw_ocr_json`).
 - [`docs/MAPPING.md`](docs/MAPPING.md) — ядро маппінгу: нормалізація SKU, lookup `(supplier, normalized sku)`, auto vs unmapped, ручний маппінг і навчання (`times_used`), крайові випадки.
