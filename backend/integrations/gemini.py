@@ -2,16 +2,31 @@
 
 This module is the single boundary between Valeraup and Google's Gemini API. It
 sends one or more photographed invoice pages to the ``gemini-2.5-flash`` model
-and returns a list of structured line-item dicts that the receipts pipeline can
-turn into :class:`~apps.receipts.models.ReceiptLine` rows.
+and returns a structured dict the receipts pipeline can turn into a detected
+:class:`~apps.suppliers.models.Supplier` plus
+:class:`~apps.receipts.models.ReceiptLine` rows.
+
+The recognized shape is **one JSON object** (not a bare array)::
+
+    {
+      "supplier": {"name": <string|null>, "edrpou": <string|null>},
+      "lines": [{"supplier_sku", "name", "quantity", "price"}, ...]
+    }
 
 Design decisions (the WHY):
 
-* **Strict JSON contract.** The model is instructed to return *only* a JSON
-  array of objects with the exact keys ``supplier_sku``, ``name``, ``quantity``
-  and ``price``. We do not let the model prose-explain; structured output is the
-  only thing the rest of the system can act on. Missing fields are ``null`` so
-  downstream code can distinguish "OCR could not read it" from "value is 0".
+* **One object, two payloads.** The auto-supplier feature needs both the vendor
+  (read from the invoice header — постачальник/продавець name + ЄДРПОУ code) and
+  the line items in a single OCR pass. Returning one object keeps that atomic:
+  the supplier and its lines come from the *same* photographed invoice.
+* **Strict JSON contract.** The model is instructed to return *only* the JSON
+  object — no prose. ``supplier`` carries ``name``/``edrpou`` (each ``null`` when
+  absent), and each line has the exact keys ``supplier_sku``, ``name``,
+  ``quantity`` and ``price``. Missing fields are ``null`` so downstream code can
+  distinguish "OCR could not read it" from "value is 0".
+* **Legacy-array tolerance.** Earlier prompt versions returned a bare line array.
+  To stay safe across a rolling deploy and prompt iterations, a top-level JSON
+  *array* is accepted and wrapped as ``{"supplier": None, "lines": <array>}``.
 * **Fence stripping.** LLMs frequently wrap JSON in Markdown code fences
   (```` ```json ... ``` ````) even when told not to. We strip those defensively
   before :func:`json.loads` rather than trusting the prompt alone.
@@ -19,8 +34,8 @@ Design decisions (the WHY):
   cheap to recover from by re-asking. We retry exactly once to avoid unbounded
   cost/latency, then surface a clear error.
 * **Env-gated network call.** When ``GEMINI_API_KEY`` is unset (local/dev/CI),
-  the SDK call is skipped and an empty list is returned, so the rest of the app
-  — and the test suite — runs without network access or secrets.
+  the SDK call is skipped and ``{"supplier": None, "lines": []}`` is returned, so
+  the rest of the app — and the test suite — runs without network or secrets.
 
 Structured JSON logging is emitted on the request and the result so OCR cost and
 quality can be audited off-host.
@@ -42,22 +57,33 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # The agreed system prompt. It is intentionally terse and imperative: the model
 # tends to follow short, unambiguous instructions about output shape far more
-# reliably than long descriptive ones. We pin the four field names here because
-# they are the contract consumed by ``recognize_receipt_task``.
+# reliably than long descriptive ones. We pin the exact key names here because
+# they are the contract consumed by ``recognize_receipt_task`` — the supplier
+# (header) and the lines (table) in one object.
 SYSTEM_PROMPT: str = (
     "Ти — система розпізнавання накладних постачальників. "
     "Тобі надсилають одне або кілька фото однієї накладної. "
-    "Витягни ВСІ позиції товарів.\n"
-    "Поверни ВИКЛЮЧНО валідний JSON-масив об'єктів. "
-    "Без пояснень, без markdown, без тексту до або після масиву.\n"
-    "Кожен об'єкт має рівно такі поля:\n"
-    '  "supplier_sku" — артикул/код товару постачальника (рядок),\n'
-    '  "name" — назва товару (рядок),\n'
-    '  "quantity" — кількість (число),\n'
-    '  "price" — ціна за одиницю / собівартість (число).\n'
-    "Якщо якогось значення немає на накладній — постав null для цього поля. "
+    "Витягни ПОСТАЧАЛЬНИКА (із шапки накладної) та ВСІ позиції товарів.\n"
+    "Поверни ВИКЛЮЧНО один валідний JSON-обʼєкт. "
+    "Без пояснень, без markdown, без тексту до або після обʼєкта.\n"
+    "Обʼєкт має рівно такі поля:\n"
+    '  "supplier" — обʼєкт постачальника з полями:\n'
+    '      "name" — назва постачальника / продавця / вантажовідправника (рядок),\n'
+    '      "edrpou" — код ЄДРПОУ (8 цифр) або ІПН/РНОКПП для ФОП; рядок лише з цифр,\n'
+    '  "lines" — масив позицій, де кожна позиція має рівно такі поля:\n'
+    '      "supplier_sku" — артикул/код товару ПОСТАЧАЛЬНИКА (рядок). Шукай його у '
+    "колонці з заголовком «Артикул», «Код», «Код товару», «Кат. №», "
+    "«Артикул постачальника» або «SKU». Це алфавітно-цифровий код позиції, "
+    "а НЕ порядковий номер рядка (№, № п/п) і не штрихкод. Якщо код у накладній "
+    'є — обовʼязково витягни його; null лише коли колонки коду немає взагалі,\n'
+    '      "name" — назва товару (рядок),\n'
+    '      "quantity" — кількість (число),\n'
+    '      "price" — ціна за одиницю / собівартість (число).\n'
+    "Постачальника бери з шапки / реквізитів накладної (постачальник/продавець + ЄДРПОУ). "
+    "Якщо якогось значення немає на накладній — постав null для цього поля "
+    "(зокрема supplier.name або supplier.edrpou). "
     "НЕ вигадуй значення, яких немає на фото. "
-    "Якщо позицій немає — поверни порожній масив []."
+    "Якщо позицій немає — постав порожній масив [] у полі \"lines\"."
 )
 
 # Matches an opening Markdown code fence with an optional language tag, e.g.
@@ -90,28 +116,77 @@ def _strip_code_fences(text: str) -> str:
     return stripped.strip()
 
 
-def _parse_response(text: str) -> list[dict[str, Any]]:
-    """Parse a Gemini text response into a list of line-item dicts.
+def _clean_lines(rows: Any) -> list[dict[str, Any]]:
+    """Keep only well-formed object rows from a decoded ``lines`` value.
+
+    Args:
+        rows: The decoded ``lines`` value (expected to be a list).
+
+    Returns:
+        A list of dicts; a non-list input yields ``[]`` and any non-dict element
+        is dropped so a single stray element cannot poison the whole batch.
+    """
+
+    if not isinstance(rows, list):
+        return []
+    return [row for row in rows if isinstance(row, dict)]
+
+
+def _clean_supplier(value: Any) -> dict[str, Any] | None:
+    """Normalise the decoded ``supplier`` value to a dict or ``None``.
+
+    The model is asked for ``{"name": ..., "edrpou": ...}``. We accept a dict and
+    pass it through unchanged (downstream code reads ``.get('name')`` /
+    ``.get('edrpou')``), and coerce anything else — ``null``, a string, a list —
+    to ``None`` so the caller has a single "no supplier detected" sentinel.
+
+    Args:
+        value: The decoded ``supplier`` value from the model.
+
+    Returns:
+        The supplier dict if it is a dict, otherwise ``None``.
+    """
+
+    return value if isinstance(value, dict) else None
+
+
+def _parse_response(text: str) -> dict[str, Any]:
+    """Parse a Gemini text response into a ``{supplier, lines}`` dict.
+
+    Tolerates two shapes for safety across prompt iterations / rolling deploys:
+
+    * the **new object** ``{"supplier": {...}|null, "lines": [...]}``, and
+    * a **legacy bare array** of line dicts, which is wrapped as
+      ``{"supplier": None, "lines": <array>}``.
 
     Args:
         text: Raw response text from the model (may contain code fences).
 
     Returns:
-        The decoded JSON array as a list of dicts.
+        A dict with ``supplier`` (a dict or ``None``) and ``lines`` (a list of
+        dicts).
 
     Raises:
-        ValueError: If the response does not decode to a JSON list.
+        ValueError: If the response does not decode to a JSON object or array.
     """
 
     cleaned = _strip_code_fences(text)
     data = json.loads(cleaned)
-    if not isinstance(data, list):
-        raise ValueError(
-            f"Gemini response decoded to {type(data).__name__}, expected a JSON array"
-        )
-    # Keep only well-formed object rows; skip anything that is not a dict so a
-    # single stray element cannot poison the whole batch.
-    return [row for row in data if isinstance(row, dict)]
+
+    if isinstance(data, list):
+        # Legacy shape: a bare array of line dicts, no supplier.
+        return {"supplier": None, "lines": _clean_lines(data)}
+
+    if isinstance(data, dict):
+        return {
+            "supplier": _clean_supplier(data.get("supplier")),
+            "lines": _clean_lines(data.get("lines")),
+        }
+
+    raise ValueError(
+        f"Gemini response decoded to {type(data).__name__}, "
+        "expected a JSON object or array"
+    )
 
 
 def _call_gemini(images: list[bytes], model: str) -> str:
@@ -154,17 +229,24 @@ def _call_gemini(images: list[bytes], model: str) -> str:
     return response.text or ""
 
 
-def recognize_invoice(images: list[bytes], *, model: str | None = None) -> list[dict]:
-    """Recognise invoice line items from photographed pages via Gemini Vision.
+def recognize_invoice(images: list[bytes], *, model: str | None = None) -> dict:
+    """Recognise the supplier and line items from invoice pages via Gemini.
 
-    Sends every page of a single supplier invoice to Gemini 2.5 Flash and
-    returns the parsed line-item dicts. The response is defensively unwrapped
-    from any Markdown fences and JSON-decoded; on a parse failure the call is
-    retried exactly once before giving up.
+    Sends every page of a single supplier invoice to Gemini 2.5 Flash and returns
+    the parsed ``{"supplier": {...}|None, "lines": [...]}`` dict. The supplier is
+    read from the invoice header (постачальник/продавець name + ЄДРПОУ code) and
+    feeds the auto-supplier detection; the lines feed
+    :class:`~apps.receipts.models.ReceiptLine` creation and per-supplier mapping.
 
-    When ``settings.GEMINI_API_KEY`` is empty (local/dev/CI without a key) the
-    network call is skipped and an empty list is returned, so the pipeline and
-    tests run without secrets.
+    The response is defensively unwrapped from any Markdown fences and
+    JSON-decoded; both the new object shape **and** a legacy bare line-array are
+    accepted (the array is wrapped as ``{"supplier": None, "lines": <array>}``).
+    On a parse failure the call is retried exactly once before giving up.
+
+    When ``settings.GEMINI_API_KEY`` is empty or there are no images
+    (local/dev/CI without a key), the network call is skipped and the offline
+    guard returns ``{"supplier": None, "lines": []}`` so the pipeline and tests
+    run without secrets.
 
     Args:
         images: Raw image bytes, one entry per photographed invoice page. All
@@ -173,13 +255,20 @@ def recognize_invoice(images: list[bytes], *, model: str | None = None) -> list[
             (``"gemini-2.5-flash"``).
 
     Returns:
-        A list of dicts, each with keys ``supplier_sku``, ``name``,
-        ``quantity`` and ``price`` (values may be ``None`` where OCR could not
-        read them). Empty when there are no images, no API key, or no items.
+        A dict with two keys:
+
+        * ``supplier``: ``{"name": <str|None>, "edrpou": <str|None>}`` read from
+          the invoice header, or ``None`` when no supplier was detected.
+        * ``lines``: a list of dicts, each with keys ``supplier_sku``, ``name``,
+          ``quantity`` and ``price`` (values may be ``None`` where OCR could not
+          read them). Empty when there are no items.
+
+        Both default to the offline sentinel ``{"supplier": None, "lines": []}``
+        when there are no images, no API key, or nothing was recognized.
 
     Raises:
         ValueError: If Gemini returns a response that cannot be parsed as a JSON
-            array even after one retry.
+            object or array even after one retry.
     """
 
     resolved_model = model or settings.GEMINI_MODEL
@@ -189,11 +278,11 @@ def recognize_invoice(images: list[bytes], *, model: str | None = None) -> list[
             "gemini_recognize_skip",
             extra={"reason": "no_images", "model": resolved_model},
         )
-        return []
+        return {"supplier": None, "lines": []}
 
     if not settings.GEMINI_API_KEY:
-        # Without a key we cannot (and must not) call out. Return empty so the
-        # task marks the receipt appropriately instead of crashing.
+        # Without a key we cannot (and must not) call out. Return the offline
+        # sentinel so the task marks the receipt appropriately instead of crashing.
         logger.warning(
             "gemini_recognize_skip",
             extra={
@@ -202,7 +291,7 @@ def recognize_invoice(images: list[bytes], *, model: str | None = None) -> list[
                 "image_count": len(images),
             },
         )
-        return []
+        return {"supplier": None, "lines": []}
 
     logger.info(
         "gemini_recognize_request",
@@ -215,17 +304,20 @@ def recognize_invoice(images: list[bytes], *, model: str | None = None) -> list[
     for attempt in range(2):
         try:
             raw = _call_gemini(images, resolved_model)
-            lines = _parse_response(raw)
+            data = _parse_response(raw)
             logger.info(
                 "gemini_recognize_result",
                 extra={
                     "model": resolved_model,
                     "image_count": len(images),
-                    "line_count": len(lines),
+                    "line_count": len(data["lines"]),
+                    # Record only WHETHER a supplier was detected — never the raw
+                    # name/code in the result event (that lives in raw_ocr audit).
+                    "supplier_detected": data["supplier"] is not None,
                     "attempt": attempt + 1,
                 },
             )
-            return lines
+            return data
         except (json.JSONDecodeError, ValueError) as exc:
             last_error = exc
             logger.warning(

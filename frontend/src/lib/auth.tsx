@@ -104,8 +104,13 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
       return null;
     }
     try {
-      const { access } = await authApi.refresh(storedRefresh);
+      const { access, refresh: rotated } = await authApi.refresh(storedRefresh);
       setAccessToken(access);
+      // Rotation is ON server-side: the old refresh is blacklisted after use, so
+      // we MUST persist the new one or the next refresh would 401.
+      if (rotated) {
+        await secureStore.set(REFRESH_KEY, rotated);
+      }
       setIsAuthenticated(true);
       return access;
     } catch {
@@ -134,6 +139,12 @@ export function AuthProvider({ children }: { children: ReactNode }): JSX.Element
   );
 
   const logout = useCallback(async () => {
+    // Best-effort: blacklist the refresh token server-side so it cannot be reused
+    // even if it leaked. Always clear the local tokens regardless of the result.
+    const stored = await secureStore.get(REFRESH_KEY);
+    if (stored) {
+      await authApi.logout(stored).catch(() => undefined);
+    }
     await clearTokens();
   }, [clearTokens]);
 

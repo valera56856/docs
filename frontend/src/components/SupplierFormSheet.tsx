@@ -64,6 +64,7 @@ export function SupplierFormSheet({
 }: SupplierFormSheetProps): JSX.Element {
   const isEdit = Boolean(supplier);
   const [name, setName] = useState('');
+  const [edrpou, setEdrpou] = useState('');
   const [note, setNote] = useState('');
   const [isActive, setIsActive] = useState(true);
   const [touched, setTouched] = useState(false);
@@ -74,11 +75,19 @@ export function SupplierFormSheet({
   useEffect(() => {
     if (open) {
       setName(supplier?.name ?? '');
+      setEdrpou(supplier?.edrpou ?? '');
       setNote(supplier?.note ?? '');
       setIsActive(supplier?.is_active ?? true);
       setTouched(false);
     }
-  }, [open, supplier?.id, supplier?.name, supplier?.note, supplier?.is_active]);
+  }, [
+    open,
+    supplier?.id,
+    supplier?.name,
+    supplier?.edrpou,
+    supplier?.note,
+    supplier?.is_active,
+  ]);
 
   const trimmedName = name.trim();
   const nameError = touched && !trimmedName ? 'Вкажіть назву.' : undefined;
@@ -88,7 +97,12 @@ export function SupplierFormSheet({
     if (!trimmedName) {
       return;
     }
-    onSubmit({ name: trimmedName, note: note.trim(), is_active: isActive });
+    onSubmit({
+      name: trimmedName,
+      edrpou: edrpou.trim(),
+      note: note.trim(),
+      is_active: isActive,
+    });
   };
 
   return (
@@ -117,6 +131,16 @@ export function SupplierFormSheet({
             onBlur={() => setTouched(true)}
             placeholder="Напр. ТОВ «Постачальник»"
             error={nameError}
+          />
+
+          <Input
+            label="ЄДРПОУ"
+            value={edrpou}
+            disabled={saving}
+            onChange={(e) => setEdrpou(e.target.value)}
+            placeholder="Необовʼязково"
+            inputMode="numeric"
+            hint="Код ЄДРПОУ — за ним накладна автоматично визначає постачальника."
           />
 
           <Input

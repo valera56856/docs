@@ -113,11 +113,28 @@ def test_admin_can_create_supplier(admin_client) -> None:
     assert response.data["name"] == "ACME Постачання"
     assert response.data["is_active"] is True
     assert response.data["note"] == ""
+    # ``edrpou`` is optional; absent from a minimal create → blank.
+    assert response.data["edrpou"] == ""
     assert "id" in response.data
     assert "created_at" in response.data
 
     created = Supplier.objects.get(pk=response.data["id"])
     assert created.name == "ACME Постачання"
+
+
+@pytest.mark.django_db
+def test_admin_can_create_supplier_with_edrpou(admin_client) -> None:
+    """An admin may set the ЄДРПОУ tax code on a hand-typed supplier."""
+    response = admin_client.post(
+        LIST_PATH,
+        {"name": "ТОВ Демо", "edrpou": "12345678"},
+        format="json",
+    )
+
+    assert response.status_code == 201
+    assert response.data["edrpou"] == "12345678"
+    created = Supplier.objects.get(pk=response.data["id"])
+    assert created.edrpou == "12345678"
 
 
 @pytest.mark.django_db

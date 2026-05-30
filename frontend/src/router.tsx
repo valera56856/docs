@@ -1,14 +1,21 @@
 /**
  * Application route table.
  *
- * Routes mirror the Valeraup user flow (suppliers → camera → table → mapping →
+ * Routes mirror the Valeraup user flow (scan-first → table → mapping →
  * generate):
  *   /                       -> Login (email/password or fast PIN)
- *   /suppliers              -> pick a supplier; tap creates a draft receipt
+ *   /receipt/new            -> scan-first: create a supplier-less draft + camera
+ *   /suppliers              -> browse/manage suppliers (legacy pick-first entry)
  *   /receipt/:id/camera     -> capture + upload invoice photos, then recognize
  *   /receipt/:id            -> recognized lines + inline edit + mapping table
  *   /receipt/:id/generate   -> generate + download the .xlsx receipt
  *   /admin                  -> catalog sync, suppliers, mappings (admin only)
+ *
+ * The scan-first entry (`/receipt/new`) is the primary "Нова накладна" flow: the
+ * operator photographs the invoice WITHOUT picking a supplier first, and
+ * recognition auto-detects the supplier from the header. {@link CameraPage}
+ * creates the draft on entry when there is no `:id`, then carries the new id in
+ * the URL exactly like the supplier-first path.
  *
  * Auth gating: every route except `/` is wrapped in {@link RequireAuth}, which
  * redirects unauthenticated users to the login screen. The `/admin` route adds
@@ -77,6 +84,9 @@ export const routes: RouteObject[] = [
         element: <AppShell />,
         children: [
           { path: '/suppliers', element: <SuppliersPage /> },
+          // Scan-first: a supplier-less draft is created on entry; the camera
+          // reuses the same component (it branches on the missing `:id`).
+          { path: '/receipt/new', element: <CameraPage /> },
           { path: '/receipt/:id/camera', element: <CameraPage /> },
           { path: '/receipt/:id', element: <ReceiptTablePage /> },
           { path: '/receipt/:id/generate', element: <GeneratePage /> },

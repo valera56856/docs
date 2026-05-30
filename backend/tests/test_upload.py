@@ -11,8 +11,9 @@ Two surfaces are covered:
 
 Storage is redirected to a temporary directory via ``settings(MEDIA_ROOT=...)``
 so uploads never touch a real bucket and leave nothing behind. The Gemini
-network boundary is never called — ``recognize_invoice`` short-circuits to ``[]``
-when there is no API key, which is exactly the path asserted here.
+network boundary is never called — ``recognize_invoice`` short-circuits to the
+offline sentinel ``{"supplier": None, "lines": []}`` when there is no API key,
+which is exactly the path asserted here.
 """
 
 from __future__ import annotations
@@ -69,7 +70,9 @@ def test_photo_upload_creates_receipt_photo(
     auth_client, supplier, media_root
 ) -> None:
     """A multipart ``image`` upload creates a photo with a stored file + URL."""
-    receipt = Receipt.objects.create(supplier=supplier, status="draft")
+    receipt = Receipt.objects.create(
+        supplier=supplier, status="draft", created_by="operator@example.com"
+    )
 
     upload = io.BytesIO(_png_bytes())
     upload.name = "page1.png"
@@ -97,7 +100,9 @@ def test_photo_upload_creates_receipt_photo(
 @pytest.mark.django_db
 def test_photo_upload_rejects_non_image(auth_client, supplier, media_root) -> None:
     """Non-image junk is rejected by the ``ImageField`` validation (400)."""
-    receipt = Receipt.objects.create(supplier=supplier, status="draft")
+    receipt = Receipt.objects.create(
+        supplier=supplier, status="draft", created_by="operator@example.com"
+    )
 
     junk = io.BytesIO(b"not an image at all")
     junk.name = "evil.png"
@@ -113,7 +118,9 @@ def test_photo_upload_rejects_non_image(auth_client, supplier, media_root) -> No
 @pytest.mark.django_db
 def test_photo_upload_requires_auth(api_client, supplier, media_root) -> None:
     """Anonymous photo upload is rejected (401)."""
-    receipt = Receipt.objects.create(supplier=supplier, status="draft")
+    receipt = Receipt.objects.create(
+        supplier=supplier, status="draft", created_by="operator@example.com"
+    )
     upload = io.BytesIO(_png_bytes())
     upload.name = "page1.png"
     response = api_client.post(
@@ -130,10 +137,11 @@ def test_recognize_offline_settles_needs_mapping(
 ) -> None:
     """With no Gemini key, recognition yields no lines → ``needs_mapping``.
 
-    The receipt has a real uploaded photo, but ``recognize_invoice`` returns
-    ``[]`` without an API key. The task must still complete cleanly (idempotent,
-    no error) and the status helper settles the receipt at ``needs_mapping`` —
-    not ``error`` and not a hang in ``recognizing``.
+    The receipt has a real uploaded photo, but ``recognize_invoice`` returns the
+    offline sentinel (no supplier, no lines) without an API key. The task must
+    still complete cleanly (idempotent, no error) and the status helper settles
+    the receipt at ``needs_mapping`` — not ``error`` and not a hang in
+    ``recognizing``.
     """
     settings.GEMINI_API_KEY = ""  # offline guard
 

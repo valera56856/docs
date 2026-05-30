@@ -25,6 +25,7 @@
 | 12 | Workflow статусів | ✅ `recompute_receipt_status` (draft→recognizing→needs_mapping/ready→xlsx_ready, error) |
 | 13 | Деплой | ✅ `docker-compose.prod.yml`, `entrypoint.sh`, whitenoise, gunicorn, split beat |
 | 14 | Адмін-екран «Налаштування» (PWA) | ✅ SalesDrive (DB-URL + тест + синк), CRUD постачальників, керування маппінгами — все через дизайнерський PWA `/admin`, не Django admin |
+| 15 | Авто-визначення постачальника (scan-first) | 🟡 backend готовий — OCR віддає `{supplier, lines}`, авто-match/create по ЄДРПОУ→назві, `PATCH /api/receipts/{id}/` для зміни постачальника з ре-маппінгом; фронтенд scan-first потоку — окремо |
 
 ### Story 14 — деталі (delta поверх MVP)
 
@@ -52,6 +53,40 @@
 `MappingSheet`, який лишається для флоу накладної). `SuppliersPage` має шестірню
 «Налаштування» в шапці (тільки для адміна). Деталі — у
 [ARCHITECTURE.md](ARCHITECTURE.md) та [INTEGRATIONS.md](INTEGRATIONS.md) §1.4.
+
+### Story 15 — авто-визначення постачальника (delta, backend)
+
+Система **сама визначає постачальника** зі сканованої накладної замість того, щоб
+оператор обирав його першим. Замість «обери постачальника → фотографуй» —
+«фотографуй → система визначила постачальника».
+
+- **Модель.** `Supplier.edrpou` (`CharField`, indexed, blank) — код ЄДРПОУ,
+  надійний ключ постачальника. `Receipt.supplier` тепер `null=True` (чернетка
+  scan-first ще не має постачальника), додано `Receipt.recognized_supplier`
+  (`JSONField`) — сирий OCR-дикт постачальника для аудиту.
+- **OCR-контракт.** `gemini.recognize_invoice` повертає **один обʼєкт**
+  `{"supplier": {"name", "edrpou"}|None, "lines": [...]}`. Промпт читає шапку
+  накладної (постачальник/продавець + ЄДРПОУ). Толерантний до легасі-масиву рядків
+  (обгортає як `{supplier: None, lines: array}`); offline-guard повертає
+  `{supplier: None, lines: []}`.
+- **Сервіс.** `apps.suppliers.services.match_or_create_supplier(name, edrpou)` —
+  match спершу по **ЄДРПОУ** (точно, якщо не порожній), потім по нормалізованій
+  назві (`normalize_supplier_name`: trim/collapse/UPPER), інакше створює нового.
+  Ідемпотентний.
+- **Таск.** `recognize_receipt_task` після OCR авто-визначає постачальника (лише
+  якщо `receipt.supplier` ще порожній), завжди пише `recognized_supplier`,
+  виконує per-supplier маппінг тільки коли постачальник є (інакше рядки лишаються
+  unmapped, статус `needs_mapping`).
+- **API.** `POST /api/receipts/` — постачальник **опційний** (scan-first створює
+  чернетку без нього). Деталь-серіалізатор віддає вкладений `supplier`
+  (`{id, name, edrpou}` або `null`) + `recognized_supplier`. Новий
+  `PATCH /api/receipts/{id}/ {"supplier": <id>}` встановлює/змінює постачальника й
+  **повторно** виконує маппінг наявних рядків (`remap_receipt_lines`) + перераховує
+  статус; ручні маппінги зберігаються.
+
+Деталі — у [INTEGRATIONS.md](INTEGRATIONS.md) §2 (Gemini supplier extraction).
+Міграції (`Supplier.edrpou`, `Receipt.supplier` nullable + `recognized_supplier`)
+генерує інтегратор через `makemigrations` (не закомічені цим агентом).
 
 ## Верифікація (перевірено, не на словах)
 

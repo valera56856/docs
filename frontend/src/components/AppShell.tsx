@@ -8,9 +8,14 @@
  *
  * On `lg+` (desktop) it adds a proper desktop top bar so the app stops looking
  * like a thin phone column floating in the middle of a wide screen:
- *   - the «Valeraup» brand mark (links to the suppliers home),
- *   - primary nav (Постачальники · Нова накладна · Налаштування[admin only]),
+ *   - the «Valeraup» brand mark (links to the scan-first home),
+ *   - primary nav (Нова накладна[scan-first] · Постачальники · Налаштування[admin only]),
  *   - the {@link ThemeToggle} and a «Вийти» (logout) action.
+ *
+ * «Нова накладна» is the scan-first CTA: it goes straight to the camera
+ * (`/receipt/new`) without picking a supplier first — recognition auto-detects
+ * the supplier from the invoice header. «Постачальники» stays for browsing /
+ * managing the supplier directory.
  *
  * The bar is `hidden lg:flex`, so it never appears on mobile. Pages still render
  * their own in-page header; on desktop that header reads as a page title beneath
@@ -81,8 +86,10 @@ export function AppShell(): JSX.Element {
   }, []);
 
   const navItems: NavItem[] = [
+    // Scan-first is the primary action — listed first and matched exactly so it
+    // does not light up while on a `/receipt/:id` table.
+    { to: '/receipt/new', label: 'Нова накладна', icon: FilePlus2, end: true },
     { to: '/suppliers', label: 'Постачальники', icon: Store },
-    { to: '/suppliers', label: 'Нова накладна', icon: FilePlus2 },
     ...(isAdmin
       ? [{ to: '/admin', label: 'Налаштування', icon: Settings }]
       : []),
@@ -103,10 +110,10 @@ export function AppShell(): JSX.Element {
         }}
       >
         <div className="mx-auto flex h-16 w-full max-w-screen-xl items-center justify-between gap-[var(--space-6)] px-[var(--space-6)] xl:px-[var(--space-8)]">
-          {/* Brand mark — returns to the suppliers home. */}
+          {/* Brand mark — returns to the scan-first home (Нова накладна). */}
           <button
             type="button"
-            onClick={() => navigate('/suppliers')}
+            onClick={() => navigate('/receipt/new')}
             className="flex items-center gap-[var(--space-3)] rounded-[var(--radius-md)] focus-visible:outline-none"
             aria-label="Valeraup — на головну"
           >

@@ -15,11 +15,13 @@ from apps.suppliers.models import Supplier
 class SupplierAdmin(admin.ModelAdmin):
     """Admin configuration for :class:`Supplier`.
 
-    Provides quick filtering by active state, name search, and an inline
-    ``is_active`` toggle in the changelist for fast activation/deactivation.
+    Provides quick filtering by active state, name/ЄДРПОУ search, and an inline
+    ``is_active`` toggle in the changelist for fast activation/deactivation. The
+    ``edrpou`` tax code is shown and searchable so staff can spot/merge duplicate
+    vendors that auto-detection created from the same code.
     """
 
-    list_display = ("name", "is_active", "created_at")
+    list_display = ("name", "edrpou", "is_active", "created_at")
     list_filter = ("is_active",)
-    search_fields = ("name", "note")
+    search_fields = ("name", "edrpou", "note")
     list_editable = ("is_active",)

@@ -6,6 +6,8 @@ Implements every receipt endpoint in the contract:
   (:class:`ReceiptCreateView`).
 * ``GET   /api/receipts/{id}/``                       — receipt with lines/status
   (:class:`ReceiptDetailView`).
+* ``PATCH /api/receipts/{id}/``                       — set/change the supplier
+  (:class:`ReceiptDetailView`, re-runs mapping).
 * ``POST  /api/receipts/{id}/recognize/``             — enqueue Gemini OCR
   (:class:`ReceiptRecognizeView`).
 * ``PATCH /api/receipts/{id}/lines/{line_id}/``       — edit qty/price/sku
@@ -25,9 +27,9 @@ from __future__ import annotations
 import logging
 
 from django.shortcuts import get_object_or_404
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import status
-from rest_framework.generics import CreateAPIView, RetrieveAPIView
+from rest_framework.generics import CreateAPIView, RetrieveUpdateAPIView
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.request import Request
@@ -45,11 +47,17 @@ from .serializers import (
     ReceiptPhotoUploadResultSerializer,
     ReceiptPhotoUploadSerializer,
     ReceiptSerializer,
+    ReceiptUpdateSerializer,
     RecognizeResultSerializer,
 )
+from .services.mapping import remap_receipt_lines
 from .services.status import recompute_receipt_status, set_receipt_status
 
 logger = logging.getLogger(__name__)
+
+# Per-receipt photo cap (H4): an invoice is at most a handful of pages, so 20 is
+# a generous ceiling that still blocks using one receipt to flood storage / OCR.
+MAX_PHOTOS_PER_RECEIPT = 20
 
 
 def _actor(request: Request) -> str:
@@ -70,6 +78,64 @@ def _actor(request: Request) -> str:
     return getattr(user, "email", "") or getattr(user, "username", "") or ""
 
 
+def _is_admin(request: Request) -> bool:
+    """Return whether the caller is a Valeraup *product* admin.
+
+    Resolves the role off the user's :class:`~apps.accounts.models.Profile`
+    (``role == 'admin'``) — the same product role :class:`IsAdmin` checks, NOT
+    Django's ``is_staff``. Defensive against a missing/half-built profile: any
+    failure to resolve a role degrades to ``False`` (least privilege), so a
+    request can never escalate to admin visibility because a profile row is
+    absent. An anonymous/inactive user is never an admin.
+
+    Args:
+        request: The authenticated DRF request.
+
+    Returns:
+        ``True`` only when the resolved profile role is ``admin``.
+    """
+
+    user = getattr(request, "user", None)
+    if user is None or not user.is_authenticated or not user.is_active:
+        return False
+    try:
+        from apps.accounts.models import Profile
+
+        profile = getattr(user, "profile", None)
+        if profile is None:
+            profile = Profile.objects.filter(user=user).first()
+        return profile is not None and profile.role == Profile.ROLE_ADMIN
+    except Exception:  # pragma: no cover - never 500 on a role lookup
+        return False
+
+
+def _visible_receipts(request: Request):
+    """Return the receipts the caller is allowed to see (IDOR scoping, H2).
+
+    Non-admin operators may only access receipts they created, so a receipt id
+    belonging to another operator is invisible to them. Admins see everything.
+    This is the single source of truth used by every per-object receipt lookup
+    (detail, recognize, line PATCH/map, generate-xlsx, supplier PATCH) so an
+    operator cannot reach another user's receipt — or any of its lines — by id.
+
+    WHY filter (yielding 404) rather than a 403 permission check: returning 404
+    for someone else's receipt does not confirm the id exists, avoiding id
+    enumeration. ``created_by`` is stamped with :func:`_actor` (email/username)
+    on create, so the scope matches what the owner sees.
+
+    Args:
+        request: The authenticated DRF request.
+
+    Returns:
+        QuerySet[Receipt]: ``Receipt.objects.all()`` for admins, otherwise only
+            the caller's own receipts (filtered on ``created_by``).
+    """
+
+    if _is_admin(request):
+        return Receipt.objects.all()
+    return Receipt.objects.filter(created_by=_actor(request))
+
+
 @extend_schema(
     request=ReceiptCreateSerializer,
     responses={201: ReceiptSerializer},
@@ -79,9 +145,12 @@ def _actor(request: Request) -> str:
 class ReceiptCreateView(CreateAPIView):
     """Create a draft receipt (``POST /api/receipts/``).
 
-    The camera-first PWA flow posts just ``{"supplier": id}`` to open a ``draft``
-    receipt, then uploads photos via ``POST .../photos/``. The legacy
-    ``photo_urls`` field remains optional for back-compat (pre-upload-then-POST).
+    The camera-first PWA flow posts an empty body (or ``{"supplier": null}``) to
+    open a ``draft`` receipt with **no** supplier — the vendor is auto-detected
+    from the photographed invoice header on recognition. Photos are then uploaded
+    via ``POST .../photos/``. A supplier id may still be sent explicitly (legacy
+    "pick first" flow); the legacy ``photo_urls`` field remains optional for
+    back-compat (pre-upload-then-POST).
     """
 
     serializer_class = ReceiptCreateSerializer
@@ -105,23 +174,112 @@ class ReceiptCreateView(CreateAPIView):
         )
 
 
-@extend_schema(
-    responses={200: ReceiptSerializer},
-    summary="Отримати надходження з рядками",
-    tags=["receipts"],
+@extend_schema_view(
+    get=extend_schema(
+        responses={200: ReceiptSerializer},
+        summary="Отримати надходження з рядками",
+        tags=["receipts"],
+    ),
+    patch=extend_schema(
+        request=ReceiptUpdateSerializer,
+        responses={200: ReceiptSerializer},
+        summary="Встановити/змінити постачальника надходження",
+        description=(
+            "Встановлює або змінює постачальника надходження "
+            "(скан-перший потік або виправлення авто-визначення). "
+            "Після зміни повторно виконує авто-маппінг наявних рядків під "
+            "новим постачальником і перераховує статус."
+        ),
+        tags=["receipts"],
+    ),
+    put=extend_schema(exclude=True),
 )
-class ReceiptDetailView(RetrieveAPIView):
-    """Retrieve one receipt with nested photos and lines.
+class ReceiptDetailView(RetrieveUpdateAPIView):
+    """Retrieve a receipt, or set/change its supplier.
 
-    ``GET /api/receipts/{id}/``. Prefetches related rows so the nested
-    serializer does not issue N+1 queries.
+    * ``GET   /api/receipts/{id}/`` — the receipt with nested supplier, photos and
+      lines. Prefetches related rows so the nested serializer avoids N+1 queries.
+    * ``PATCH /api/receipts/{id}/`` — set or change ``supplier``. On change we
+      re-run per-supplier mapping for the receipt's existing lines (a line that
+      now matches a remembered mapping flips to ``auto``) and recompute the
+      receipt status, so picking the right vendor can move a ``needs_mapping``
+      receipt straight to ``ready``.
+
+    ``PUT`` is hidden from the schema: the only meaningful mutation is the partial
+    supplier change, so we steer clients to ``PATCH``.
     """
 
-    serializer_class = ReceiptSerializer
     permission_classes = [IsAuthenticated]
-    queryset = Receipt.objects.all().prefetch_related(
-        "photos", "lines", "lines__matched_product"
-    )
+    http_method_names = ["get", "patch", "head", "options"]
+
+    def get_queryset(self):
+        """Return the prefetched receipts the caller may access (IDOR scope).
+
+        Scopes the lookup to :func:`_visible_receipts` (own receipts for an
+        operator, all for an admin) so requesting another user's receipt by id
+        yields ``404`` from ``RetrieveUpdateAPIView`` rather than exposing it.
+        The prefetch chain is preserved so the nested read serializer avoids
+        N+1 queries.
+
+        Returns:
+            QuerySet[Receipt]: The caller's visible receipts, prefetched.
+        """
+
+        return _visible_receipts(self.request).prefetch_related(
+            "photos", "lines", "lines__matched_product"
+        )
+
+    def get_serializer_class(self):
+        """Return the read serializer for GET and the update serializer for PATCH.
+
+        Returns:
+            :class:`ReceiptUpdateSerializer` for write methods (``PATCH``/``PUT``),
+            otherwise :class:`ReceiptSerializer` for reads.
+        """
+
+        if self.request.method in ("PATCH", "PUT"):
+            return ReceiptUpdateSerializer
+        return ReceiptSerializer
+
+    def perform_update(self, serializer: ReceiptUpdateSerializer) -> None:
+        """Save the supplier change, then re-map lines and recompute status.
+
+        Detecting whether the supplier actually changed lets us skip the (cheap
+        but not free) re-map when a PATCH re-sends the same supplier. When it does
+        change to a non-null supplier, :func:`remap_receipt_lines` re-resolves
+        every existing line against the new supplier's remembered mappings, and
+        :func:`recompute_receipt_status` flips ``needs_mapping`` ⇄ ``ready`` to
+        match the new line states.
+
+        Args:
+            serializer: The validated update serializer (bound to the instance).
+        """
+
+        receipt = serializer.instance
+        previous_supplier_id = receipt.supplier_id
+        receipt = serializer.save()
+
+        # The instance was loaded with a prefetch chain. Drop that cache up front
+        # so the re-map, the recompute, and the response serializer all read
+        # *fresh* lines from the DB rather than the pre-update prefetched snapshot.
+        receipt._prefetched_objects_cache = {}
+
+        if receipt.supplier_id != previous_supplier_id:
+            # Supplier changed (set, swapped, or cleared): re-resolve lines under
+            # the new namespace (a no-op when cleared to None) and recompute.
+            remap_receipt_lines(receipt)
+            recompute_receipt_status(receipt)
+            # ``remap_receipt_lines`` issued its own line query; clear again so the
+            # response serializer does not reuse that as a stale prefetch.
+            receipt._prefetched_objects_cache = {}
+            logger.info(
+                "receipt_supplier_changed",
+                extra={
+                    "receipt_id": receipt.pk,
+                    "previous_supplier_id": previous_supplier_id,
+                    "supplier_id": receipt.supplier_id,
+                },
+            )
 
 
 class ReceiptPhotoUploadView(APIView):
@@ -161,7 +319,22 @@ class ReceiptPhotoUploadView(APIView):
             does not exist; ``400`` if no valid image was supplied.
         """
 
-        receipt = get_object_or_404(Receipt, pk=pk)
+        # IDOR scope (H2): operators only reach their own receipts; another
+        # user's id 404s rather than letting them attach photos to it.
+        receipt = get_object_or_404(_visible_receipts(request), pk=pk)
+
+        # Per-receipt photo cap (H4): bound how many pages can be attached so a
+        # single receipt cannot be used to flood storage / the OCR worker.
+        if receipt.photos.count() >= MAX_PHOTOS_PER_RECEIPT:
+            return Response(
+                {
+                    "detail": (
+                        "Досягнуто ліміту фотографій для цього надходження "
+                        f"(максимум {MAX_PHOTOS_PER_RECEIPT})."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         serializer = ReceiptPhotoUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -197,6 +370,9 @@ class ReceiptRecognizeView(APIView):
     """
 
     permission_classes = [IsAuthenticated]
+    # Tight per-scope rate (H1): OCR is the most expensive action (Gemini call
+    # + worker time), so cap recognise triggers at the ``recognize`` rate.
+    throttle_scope = "recognize"
 
     @extend_schema(
         request=None,
@@ -221,7 +397,8 @@ class ReceiptRecognizeView(APIView):
 
         from .tasks import recognize_receipt_task
 
-        receipt = get_object_or_404(Receipt, pk=pk)
+        # IDOR scope (H2): only the owner (or an admin) can recognise a receipt.
+        receipt = get_object_or_404(_visible_receipts(request), pk=pk)
 
         # Flip to ``recognizing`` so the UI shows progress as soon as the task is
         # queued; the task itself moves it on to needs_mapping/ready/error. The
@@ -267,8 +444,12 @@ class ReceiptLineUpdateView(APIView):
             ``200`` with the updated, fully serialized line.
         """
 
+        # IDOR scope (H2): the line must belong to a receipt the caller can see,
+        # so another operator's line 404s rather than being editable by id.
         line = get_object_or_404(
-            ReceiptLine.objects.select_related("receipt"),
+            ReceiptLine.objects.select_related("receipt").filter(
+                receipt__in=_visible_receipts(request)
+            ),
             pk=line_id,
             receipt_id=pk,
         )
@@ -339,8 +520,11 @@ class ReceiptLineMapView(APIView):
         serializer.is_valid(raise_exception=True)
         our_product_id = serializer.validated_data["our_product_id"]
 
+        # IDOR scope (H2): only lines on receipts the caller may access.
         line = get_object_or_404(
-            ReceiptLine.objects.select_related("receipt"),
+            ReceiptLine.objects.select_related("receipt").filter(
+                receipt__in=_visible_receipts(request)
+            ),
             pk=line_id,
             receipt_id=pk,
         )
@@ -415,8 +599,11 @@ class ReceiptGenerateXlsxView(APIView):
 
         from .services.xlsx import build_receipt_xlsx
 
+        # IDOR scope (H2): only the owner (or an admin) can export a receipt.
         receipt = get_object_or_404(
-            Receipt.objects.prefetch_related("lines", "lines__matched_product"),
+            _visible_receipts(request).prefetch_related(
+                "lines", "lines__matched_product"
+            ),
             pk=pk,
         )
 

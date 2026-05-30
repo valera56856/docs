@@ -86,8 +86,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Dependency vulnerability audit (pip-audit)
+        # Fails the build on a known-vulnerable dependency (H8). No --ignore-vuln
+        # entries are set: every advisory must be triaged by bumping the pin in
+        # requirements.txt, not silenced. Add a specific `--ignore-vuln GHSA-...`
+        # here only with a documented justification.
+        run: |
+          pip install pip-audit
+          pip-audit -r requirements.txt
+
       - name: Django system check
         run: python manage.py check
+
+      - name: Django deploy check (informational)
+        # Surfaces production-hardening warnings (security headers, cookies, etc.)
+        # without blocking CI — DEBUG=True in CI intentionally trips some of them,
+        # so this is advisory only (H8).
+        continue-on-error: true
+        run: python manage.py check --deploy
 
       - name: Migrations are up to date
         # Fails if a model change has no committed migration (manage.py check
@@ -120,6 +136,12 @@ jobs:
         # `npm ci` requires a lockfile; fall back to `npm install` if the repo
         # has not committed one yet (early scaffold stage).
         run: npm ci || npm install
+
+      - name: Dependency vulnerability audit (npm audit)
+        # Advisory (H8): report high-severity npm advisories but never block the
+        # build (`|| true`) — a transitive dev advisory should not gate frontend
+        # CI. Triage surfaced issues by upgrading the offending package.
+        run: npm audit --audit-level=high || true
 
       - name: Type-check
         run: npx tsc -b

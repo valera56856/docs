@@ -67,10 +67,12 @@ def media_root(settings, tmp_path):
 # ---------------------------------------------------------------------------
 @pytest.mark.django_db
 def test_create_draft_receipt_from_supplier(auth_client, supplier) -> None:
-    """``POST /api/receipts/`` with just a supplier creates a ``draft``.
+    """``POST /api/receipts/`` with a supplier creates a ``draft`` (legacy flow).
 
-    The new camera-first flow creates the receipt before any photos exist, so
-    ``photo_urls`` must be optional and the receipt must start in ``draft``.
+    The camera-first flow creates the receipt before any photos exist, so
+    ``photo_urls`` must be optional and the receipt must start in ``draft``. When
+    a supplier *is* sent explicitly it is echoed back as the nested
+    ``{id, name, edrpou}`` object.
     """
     response = auth_client.post(
         "/api/receipts/", {"supplier": supplier.pk}, format="json"
@@ -79,9 +81,43 @@ def test_create_draft_receipt_from_supplier(auth_client, supplier) -> None:
     assert response.status_code == 201
     body = response.json()
     assert body["status"] == "draft"
-    assert body["supplier"] == supplier.pk
+    # Supplier is now serialized as a compact nested object, not a bare id.
+    assert body["supplier"] == {
+        "id": supplier.pk,
+        "name": supplier.name,
+        "edrpou": supplier.edrpou,
+    }
+    assert body["recognized_supplier"] is None
     assert body["photos"] == []
     assert body["lines"] == []
+
+
+@pytest.mark.django_db
+def test_create_draft_receipt_without_supplier(auth_client) -> None:
+    """``POST /api/receipts/`` with no supplier creates a scan-first ``draft``.
+
+    The camera-first flow opens a draft *before* the vendor is known — the
+    supplier is auto-detected from the photographed invoice on recognition. So an
+    empty body must succeed and yield a receipt with ``supplier: null``.
+    """
+    response = auth_client.post("/api/receipts/", {}, format="json")
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["status"] == "draft"
+    assert body["supplier"] is None
+    assert body["recognized_supplier"] is None
+
+
+@pytest.mark.django_db
+def test_create_draft_receipt_explicit_null_supplier(auth_client) -> None:
+    """``{"supplier": null}`` is accepted and creates a supplier-less draft."""
+    response = auth_client.post(
+        "/api/receipts/", {"supplier": None}, format="json"
+    )
+
+    assert response.status_code == 201
+    assert response.json()["supplier"] is None
 
 
 @pytest.mark.django_db
@@ -195,7 +231,9 @@ def test_set_status_unknown_status_raises(supplier) -> None:
 @pytest.mark.django_db
 def test_patch_line_updates_quantity_and_price(auth_client, supplier, product) -> None:
     """``PATCH .../lines/{id}/`` edits qty/price and returns the line."""
-    receipt = Receipt.objects.create(supplier=supplier, status="ready")
+    receipt = Receipt.objects.create(
+        supplier=supplier, status="ready", created_by="operator@example.com"
+    )
     line = ReceiptLine.objects.create(
         receipt=receipt,
         recognized_sku="SUP-A",
@@ -220,7 +258,11 @@ def test_patch_line_updates_quantity_and_price(auth_client, supplier, product) -
 @pytest.mark.django_db
 def test_patch_line_recomputes_status(auth_client, supplier, product) -> None:
     """Editing a line keeps a fully-mapped receipt ``ready`` (recompute runs)."""
-    receipt = Receipt.objects.create(supplier=supplier, status="needs_mapping")
+    receipt = Receipt.objects.create(
+        supplier=supplier,
+        status="needs_mapping",
+        created_by="operator@example.com",
+    )
     line = ReceiptLine.objects.create(
         receipt=receipt,
         recognized_sku="SUP-A",
@@ -250,7 +292,11 @@ def test_map_line_sets_manual_and_remembers(auth_client, supplier, product) -> N
     The single (previously unmapped) line becoming mapped flips the receipt to
     ``ready``, and a remembered :class:`ArticleMapping` is created for next time.
     """
-    receipt = Receipt.objects.create(supplier=supplier, status="needs_mapping")
+    receipt = Receipt.objects.create(
+        supplier=supplier,
+        status="needs_mapping",
+        created_by="operator@example.com",
+    )
     line = ReceiptLine.objects.create(
         receipt=receipt,
         recognized_sku="SUP-A",
@@ -285,7 +331,9 @@ def test_generate_xlsx_sets_xlsx_ready(
     auth_client, supplier, product, media_root
 ) -> None:
     """Generating the Excel stores a URL and flips status to ``xlsx_ready``."""
-    receipt = Receipt.objects.create(supplier=supplier, status="ready")
+    receipt = Receipt.objects.create(
+        supplier=supplier, status="ready", created_by="operator@example.com"
+    )
     ReceiptLine.objects.create(
         receipt=receipt,
         recognized_sku="SUP-A",
@@ -304,3 +352,159 @@ def test_generate_xlsx_sets_xlsx_ready(
     receipt.refresh_from_db()
     assert receipt.status == "xlsx_ready"
     assert receipt.xlsx_url
+
+
+# ---------------------------------------------------------------------------
+# PATCH supplier (set/change) — re-runs mapping
+# ---------------------------------------------------------------------------
+@pytest.mark.django_db
+def test_patch_supplier_sets_supplier_and_remaps(
+    auth_client, supplier, product
+) -> None:
+    """``PATCH /api/receipts/{id}/`` sets the supplier and re-runs mapping.
+
+    A scan-first receipt has no supplier and an unmapped line. There is a
+    remembered mapping for ``(supplier, SUP-A)``, so attaching the supplier must
+    auto-resolve the line (``auto``) and flip the receipt to ``ready``.
+    """
+    from apps.mapping.services import remember_mapping
+
+    receipt = Receipt.objects.create(
+        supplier=None,
+        status="needs_mapping",
+        created_by="operator@example.com",
+    )
+    line = ReceiptLine.objects.create(
+        receipt=receipt,
+        recognized_sku="SUP-A",
+        quantity=Decimal("1.000"),
+        matched_product=None,
+        match_status="unmapped",
+    )
+    # Teach the system this supplier's SKU → product before the supplier is set.
+    remember_mapping(
+        supplier_id=supplier.pk,
+        supplier_sku="SUP-A",
+        our_product_id=product.pk,
+    )
+
+    response = auth_client.patch(
+        f"/api/receipts/{receipt.pk}/",
+        {"supplier": supplier.pk},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["supplier"]["id"] == supplier.pk
+    assert body["status"] == "ready"
+
+    line.refresh_from_db()
+    assert line.matched_product_id == product.pk
+    assert line.match_status == "auto"
+
+    receipt.refresh_from_db()
+    assert receipt.supplier_id == supplier.pk
+    assert receipt.status == "ready"
+
+
+@pytest.mark.django_db
+def test_patch_supplier_no_mapping_stays_needs_mapping(
+    auth_client, supplier
+) -> None:
+    """Setting a supplier with no remembered mapping leaves lines unmapped.
+
+    The line cannot auto-resolve (nothing learned yet), so the receipt stays at
+    ``needs_mapping`` — the operator will map it manually.
+    """
+    receipt = Receipt.objects.create(
+        supplier=None,
+        status="needs_mapping",
+        created_by="operator@example.com",
+    )
+    line = ReceiptLine.objects.create(
+        receipt=receipt,
+        recognized_sku="UNKNOWN-SKU",
+        quantity=Decimal("1.000"),
+        matched_product=None,
+        match_status="unmapped",
+    )
+
+    response = auth_client.patch(
+        f"/api/receipts/{receipt.pk}/",
+        {"supplier": supplier.pk},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "needs_mapping"
+    line.refresh_from_db()
+    assert line.matched_product_id is None
+    assert line.match_status == "unmapped"
+
+
+@pytest.mark.django_db
+def test_patch_supplier_preserves_manual_mapping(
+    auth_client, supplier, product
+) -> None:
+    """Changing the supplier never overwrites a manually-mapped line.
+
+    A manual mapping is the operator's explicit decision and must outrank an
+    automatic re-resolve under a different supplier.
+    """
+    other = Supplier.objects.create(name="Інший Постач", edrpou="99999999")
+    receipt = Receipt.objects.create(
+        supplier=other, status="ready", created_by="operator@example.com"
+    )
+    line = ReceiptLine.objects.create(
+        receipt=receipt,
+        recognized_sku="SUP-A",
+        quantity=Decimal("1.000"),
+        matched_product=product,
+        match_status="manual",
+    )
+
+    response = auth_client.patch(
+        f"/api/receipts/{receipt.pk}/",
+        {"supplier": supplier.pk},
+        format="json",
+    )
+
+    assert response.status_code == 200
+    line.refresh_from_db()
+    # Manual mapping survives the supplier swap untouched.
+    assert line.matched_product_id == product.pk
+    assert line.match_status == "manual"
+
+
+@pytest.mark.django_db
+def test_patch_supplier_requires_auth(api_client, supplier) -> None:
+    """Anonymous supplier change is rejected (global ``IsAuthenticated``)."""
+    receipt = Receipt.objects.create(supplier=None, status="needs_mapping")
+    response = api_client.patch(
+        f"/api/receipts/{receipt.pk}/",
+        {"supplier": supplier.pk},
+        format="json",
+    )
+    assert response.status_code == 401
+
+
+@pytest.mark.django_db
+def test_get_receipt_exposes_recognized_supplier(auth_client, supplier) -> None:
+    """``GET`` echoes the stored ``recognized_supplier`` audit dict."""
+    receipt = Receipt.objects.create(
+        supplier=supplier,
+        status="ready",
+        created_by="operator@example.com",
+        recognized_supplier={"name": "ТОВ Демо Постач", "edrpou": "12345678"},
+    )
+
+    response = auth_client.get(f"/api/receipts/{receipt.pk}/")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["recognized_supplier"] == {
+        "name": "ТОВ Демо Постач",
+        "edrpou": "12345678",
+    }
+    assert body["supplier"]["edrpou"] == supplier.edrpou

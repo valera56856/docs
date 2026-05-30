@@ -36,8 +36,11 @@ not by default), which is sufficient here.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import socket
 from typing import Any
+from urllib.parse import urlsplit
 from xml.etree import ElementTree as ET
 
 import requests
@@ -48,6 +51,115 @@ logger = logging.getLogger(__name__)
 # large, so we allow a generous read timeout while keeping the connect timeout
 # short to fail fast on a dead host.
 _HTTP_TIMEOUT: tuple[int, int] = (10, 120)  # (connect, read) seconds
+
+# Generic rejection message for any disallowed URL (H3 SSRF). Kept deliberately
+# vague so it never reveals *why* a target was blocked (which resolved IP, which
+# scheme) — that detail would help an attacker map the internal network.
+_SSRF_REJECT_MESSAGE = "Недозволена адреса"
+
+# The cloud metadata endpoint. Although 169.254.169.254 is link-local (and thus
+# already caught by ``is_link_local``), we block it by name as well so the most
+# dangerous SSRF target (cloud credentials / instance metadata) is explicit and
+# cannot slip through if the link-local check is ever loosened.
+_BLOCKED_HOSTS = {"169.254.169.254"}
+
+
+def _ip_is_blocked(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """Return whether an IP must be rejected as an SSRF target.
+
+    Blocks the non-public ranges an attacker would use to pivot from a
+    server-side fetch into internal infrastructure: private (RFC1918 / ULA),
+    loopback, link-local (incl. the 169.254.169.254 cloud-metadata service),
+    reserved, and multicast addresses.
+
+    Args:
+        ip: A parsed IPv4 or IPv6 address.
+
+    Returns:
+        ``True`` if the address is in any disallowed range.
+    """
+
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+    )
+
+
+def _assert_url_allowed(yml_url: str) -> None:
+    """Validate a URL is a safe public http(s) target before fetching (H3 SSRF).
+
+    Defends the server-side fetch against Server-Side Request Forgery: a value
+    that is admin-editable (the SalesDrive YML URL) must not be usable to reach
+    loopback, the cloud metadata endpoint, or any private/internal host.
+
+    The check:
+
+    1. Require the scheme to be ``http`` or ``https`` (blocks ``file://``,
+       ``gopher://``, etc.).
+    2. Require a hostname.
+    3. Explicitly block the cloud-metadata host (169.254.169.254).
+    4. Resolve the hostname via :func:`socket.getaddrinfo` and reject if *any*
+       resolved address is private/loopback/link-local/reserved/multicast — so a
+       hostname that resolves to an internal IP (DNS rebinding / a crafted A
+       record) is caught, not just literal-IP URLs.
+
+    Args:
+        yml_url: The URL about to be fetched.
+
+    Raises:
+        ValueError: With the generic message :data:`_SSRF_REJECT_MESSAGE` if the
+            scheme, host, or any resolved IP is disallowed.
+    """
+
+    parts = urlsplit(yml_url)
+    if parts.scheme not in {"http", "https"}:
+        logger.warning(
+            "salesdrive_fetch_blocked",
+            extra={"reason": "scheme", "scheme": parts.scheme},
+        )
+        raise ValueError(_SSRF_REJECT_MESSAGE)
+
+    hostname = parts.hostname
+    if not hostname:
+        logger.warning("salesdrive_fetch_blocked", extra={"reason": "no_host"})
+        raise ValueError(_SSRF_REJECT_MESSAGE)
+
+    # Explicit block of the metadata host by name (defence in depth alongside the
+    # link-local IP check below).
+    if hostname in _BLOCKED_HOSTS:
+        logger.warning(
+            "salesdrive_fetch_blocked", extra={"reason": "metadata_host"}
+        )
+        raise ValueError(_SSRF_REJECT_MESSAGE)
+
+    # Resolve every address the host maps to and reject if ANY is non-public.
+    # ``getaddrinfo`` covers a literal IP too (it returns it verbatim), so a URL
+    # like http://127.0.0.1 or http://169.254.169.254 is caught here as well.
+    try:
+        infos = socket.getaddrinfo(hostname, parts.port or None)
+    except socket.gaierror as exc:
+        # Unresolvable host: treat as disallowed rather than letting requests try.
+        logger.warning(
+            "salesdrive_fetch_blocked",
+            extra={"reason": "dns", "error": str(exc)},
+        )
+        raise ValueError(_SSRF_REJECT_MESSAGE) from exc
+
+    for info in infos:
+        raw_ip = info[4][0]
+        try:
+            ip = ipaddress.ip_address(raw_ip)
+        except ValueError:  # pragma: no cover - getaddrinfo returns valid IPs
+            continue
+        if raw_ip in _BLOCKED_HOSTS or _ip_is_blocked(ip):
+            logger.warning(
+                "salesdrive_fetch_blocked",
+                extra={"reason": "private_ip"},
+            )
+            raise ValueError(_SSRF_REJECT_MESSAGE)
 
 
 def fetch_catalog_yml(yml_url: str) -> bytes:
@@ -62,7 +174,10 @@ def fetch_catalog_yml(yml_url: str) -> bytes:
         :func:`parse_catalog_yml`.
 
     Raises:
-        ValueError: If ``yml_url`` is empty.
+        ValueError: If ``yml_url`` is empty, or if the URL is a disallowed SSRF
+            target (non-http(s) scheme, missing host, or a host that resolves to
+            a private/loopback/link-local/reserved/multicast / metadata address)
+            — raised with the generic message :data:`_SSRF_REJECT_MESSAGE`.
         requests.HTTPError: If the server returns a non-2xx status.
         requests.RequestException: On network/transport errors or timeout.
     """
@@ -70,8 +185,18 @@ def fetch_catalog_yml(yml_url: str) -> bytes:
     if not yml_url:
         raise ValueError("SALESDRIVE_YML_URL is not configured")
 
+    # SSRF guard (H3): validate scheme + resolve the host and reject internal
+    # targets BEFORE any outbound request is made.
+    _assert_url_allowed(yml_url)
+
     logger.info("salesdrive_fetch_request", extra={"url": yml_url})
-    response = requests.get(yml_url, timeout=_HTTP_TIMEOUT)
+    # ``allow_redirects=False`` (H3): a 3xx could otherwise bounce the fetch to
+    # an internal address that bypassed the pre-flight check above (the redirect
+    # target is never validated). The SalesDrive export is served directly, so a
+    # redirect is not expected; treat it as the final response.
+    response = requests.get(
+        yml_url, timeout=_HTTP_TIMEOUT, allow_redirects=False
+    )
     response.raise_for_status()
     content = response.content
     logger.info(

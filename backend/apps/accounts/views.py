@@ -53,6 +53,10 @@ class EmailTokenObtainPairView(TokenObtainPairView):
 
     permission_classes = [AllowAny]
     serializer_class = EmailTokenObtainPairSerializer
+    # Brute-force throttle (H1): cap password-login attempts at the ``login``
+    # rate via ScopedRateThrottle. This is an unauthenticated endpoint, so the
+    # scope is the meaningful brake (the global ``anon`` limit also applies).
+    throttle_scope = "login"
 
 
 class PinLoginView(APIView):
@@ -66,6 +70,9 @@ class PinLoginView(APIView):
     """
 
     permission_classes = [AllowAny]
+    # Brute-force throttle (H1): a 4-digit PIN has only 10k combinations, so cap
+    # attempts hard at the ``pin`` rate to make online guessing infeasible.
+    throttle_scope = "pin"
 
     @extend_schema(
         request=PinLoginSerializer,
@@ -233,3 +240,60 @@ class SetPinView(APIView):
         # Log the action but NEVER the PIN value.
         logger.info("pin_set", extra={"user_id": request.user.pk})
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class LogoutView(APIView):
+    """Revoke a refresh token (``POST /api/auth/logout/``).
+
+    Token revocation (M5). A JWT is otherwise valid until it expires; with
+    rotation + blacklisting enabled (``SIMPLE_JWT`` + the ``token_blacklist``
+    app), a client logging out can have its refresh token *blacklisted* so it can
+    no longer be exchanged for new access tokens. The short-lived access token
+    still works until it expires (minutes), which is the standard JWT tradeoff;
+    the long-lived refresh token is what we kill here.
+
+    Requires authentication: only the holder of a valid access token may revoke
+    a refresh token.
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    @extend_schema(
+        request=None,
+        responses={205: None},
+        summary="Вийти (відкликати refresh-токен)",
+        description=(
+            "Додає переданий refresh-токен до чорного списку, щоб його більше "
+            "не можна було обміняти на нові access-токени. Тіло: "
+            "``{\"refresh\": <token>}``. Невалідний токен толерується (200)."
+        ),
+    )
+    def post(self, request: Request) -> Response:
+        """Blacklist the supplied refresh token.
+
+        Args:
+            request: Authenticated request carrying ``{"refresh": <token>}``.
+
+        Returns:
+            ``205 Reset Content`` once the token is blacklisted. An
+            absent/invalid/already-blacklisted token is tolerated and returns
+            ``200`` — logout must always appear to succeed (a client clearing
+            local credentials should never be blocked by a bad token), and not
+            leaking which tokens are valid avoids an oracle.
+        """
+
+        refresh = (request.data or {}).get("refresh")
+        if not refresh:
+            # Nothing to revoke (e.g. client only held an access token). Treat as
+            # a successful logout so the client can clear its local state.
+            return Response(status=status.HTTP_200_OK)
+
+        try:
+            RefreshToken(refresh).blacklist()
+        except Exception:  # noqa: BLE001 - any bad token is a tolerated no-op
+            # Invalid / expired / already-blacklisted: logout still "succeeds".
+            logger.info("logout_invalid_token", extra={"user_id": request.user.pk})
+            return Response(status=status.HTTP_200_OK)
+
+        logger.info("logout_ok", extra={"user_id": request.user.pk})
+        return Response(status=status.HTTP_205_RESET_CONTENT)

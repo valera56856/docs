@@ -33,6 +33,17 @@ from datetime import timedelta
 from pathlib import Path
 
 import environ
+from django.core.exceptions import ImproperlyConfigured
+
+# Decompression-bomb guard (H4): cap the total pixel count Pillow will decode so
+# a small, highly-compressed "bomb" image cannot exhaust memory when DRF's
+# ``ImageField`` (or the OCR worker) opens an upload. This is a process-wide
+# Pillow setting, so set it once here at settings import — before any image is
+# ever opened. The same 40M-pixel cap is enforced per-upload in the receipts
+# serializer; this is the defence-in-depth backstop inside Pillow itself.
+from PIL import Image as _PILImage
+
+_PILImage.MAX_IMAGE_PIXELS = 40_000_000
 
 # ---------------------------------------------------------------------------
 # Paths & environment bootstrap
@@ -60,9 +71,63 @@ if _env_file.exists():
 # ---------------------------------------------------------------------------
 # Core security / debug
 # ---------------------------------------------------------------------------
-SECRET_KEY = env("SECRET_KEY", default="change-me-in-prod")
 DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env("ALLOWED_HOSTS")
+
+# SECRET_KEY is fail-closed (H5). In DEBUG we fall back to a clearly-marked
+# throwaway dev key so local runs need no .env. In production (DEBUG=False) the
+# default is an EMPTY string: if ``SECRET_KEY`` is not supplied the next check
+# raises and the process refuses to boot, rather than silently signing tokens
+# with a publicly-known key. ``ImproperlyConfigured`` crashes loudly at import.
+SECRET_KEY = env(
+    "SECRET_KEY",
+    default=("django-insecure-dev-only-do-not-use" if DEBUG else ""),
+)
+if not SECRET_KEY:
+    raise ImproperlyConfigured("SECRET_KEY is required in production")
+
+# ``_PROD`` gates every production-only security hardening below (cookies, HSTS,
+# proxy SSL header). Derived once here so the intent reads the same everywhere.
+_PROD = not DEBUG
+
+# ---------------------------------------------------------------------------
+# Transport / cookie / header hardening (M1–M4)
+# ---------------------------------------------------------------------------
+# These knobs are gated on ``_PROD`` so local HTTP development still works (no
+# Secure-only cookies over plain http, no HSTS pinning a dev box to https).
+#
+# The Hetzner deploy terminates TLS at an edge proxy and forwards plain HTTP to
+# gunicorn with ``X-Forwarded-Proto: https``. ``SECURE_PROXY_SSL_HEADER`` lets
+# Django trust that header so ``request.is_secure()`` is correct behind the
+# proxy. We deliberately do NOT set ``SECURE_SSL_REDIRECT``: the edge proxy
+# already redirects http→https, and enabling it here too can cause redirect
+# loops when the proxy speaks plain HTTP to the app.
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+# Cookies: only send over https in prod; never expose the session cookie to JS.
+SESSION_COOKIE_SECURE = _PROD
+CSRF_COOKIE_SECURE = _PROD
+SESSION_COOKIE_HTTPONLY = True
+
+# HSTS: instruct browsers to use https for a year (with subdomains + preload) in
+# prod only. Zero in dev so a local https experiment does not pin localhost.
+SECURE_HSTS_SECONDS = 31536000 if _PROD else 0
+SECURE_HSTS_INCLUDE_SUBDOMAINS = _PROD
+SECURE_HSTS_PRELOAD = _PROD
+
+# Always-on, environment-independent header hardening.
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+
+# Origins Django trusts for CSRF (unsafe POST/PUT) when behind the edge proxy —
+# supplied via env so prod hosts are configured without code changes.
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
+
+# Upload size limits (H4): cap request body and in-memory file size at ~12 MB so
+# a payload larger than the per-image 10 MB serializer cap is rejected by Django
+# before it is fully buffered. Bytes: 12 * 1024 * 1024.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 12 * 1024 * 1024
 
 # ---------------------------------------------------------------------------
 # Applications
@@ -78,6 +143,11 @@ DJANGO_APPS = [
 
 THIRD_PARTY_APPS = [
     "rest_framework",
+    # SimpleJWT refresh-token revocation (M5): provides the OutstandingToken /
+    # BlacklistedToken tables so a rotated or logged-out refresh token can be
+    # blacklisted and rejected on subsequent refresh. The integrator runs
+    # ``makemigrations``/``migrate`` for this app.
+    "rest_framework_simplejwt.token_blacklist",
     "drf_spectacular",
     "corsheaders",
 ]
@@ -256,6 +326,25 @@ else:
     }
 
 # ---------------------------------------------------------------------------
+# Cache — backs DRF throttling counters. It MUST be shared across processes in
+# production: with the default per-process LocMemCache each gunicorn worker
+# keeps its own counters, so the effective rate limit is multiplied by the
+# worker count (a throttle bypass). In DEBUG/CI we use in-process LocMem so
+# tests and local dev need no Redis.
+# ---------------------------------------------------------------------------
+if _PROD:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": env("CACHE_URL", default="redis://redis:6379/2"),
+        }
+    }
+else:
+    CACHES = {
+        "default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}
+    }
+
+# ---------------------------------------------------------------------------
 # Django REST Framework + SimpleJWT
 # ---------------------------------------------------------------------------
 REST_FRAMEWORK = {
@@ -266,6 +355,24 @@ REST_FRAMEWORK = {
         "rest_framework.permissions.IsAuthenticated",
     ),
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    # Rate limiting (H1). The throttle CLASSES are global: every request is
+    # checked against the anon/user limits, and any view that sets a
+    # ``throttle_scope`` is additionally checked against that scope's RATE via
+    # ScopedRateThrottle. Scopes label the sensitive endpoints (PIN/login brute
+    # force, expensive OCR, the SalesDrive connectivity test) with tighter rates.
+    "DEFAULT_THROTTLE_CLASSES": [
+        "rest_framework.throttling.AnonRateThrottle",
+        "rest_framework.throttling.UserRateThrottle",
+        "rest_framework.throttling.ScopedRateThrottle",
+    ],
+    "DEFAULT_THROTTLE_RATES": {
+        "anon": "60/min",
+        "user": "1000/day",
+        "pin": "5/min",
+        "login": "10/min",
+        "recognize": "20/hour",
+        "salesdrive_test": "10/hour",
+    },
 }
 
 ACCESS_TOKEN_LIFETIME_MIN = env("ACCESS_TOKEN_LIFETIME_MIN")
@@ -274,10 +381,18 @@ REFRESH_TOKEN_LIFETIME_DAYS = env("REFRESH_TOKEN_LIFETIME_DAYS")
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=ACCESS_TOKEN_LIFETIME_MIN),
     "REFRESH_TOKEN_LIFETIME": timedelta(days=REFRESH_TOKEN_LIFETIME_DAYS),
-    # Rotate + blacklist on refresh would require the token_blacklist app; for
-    # the skeleton we keep refresh tokens long-lived (30d) without rotation.
-    "ROTATE_REFRESH_TOKENS": False,
+    # Token revocation (M5): rotate the refresh token on every use and blacklist
+    # the previous one. Combined with the ``token_blacklist`` app and the logout
+    # endpoint, this lets a stolen/old refresh token be invalidated server-side
+    # (a JWT is otherwise valid until expiry). Requires the blacklist migrations.
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
+    # Sign JWTs explicitly with SECRET_KEY (H5). SimpleJWT defaults to SECRET_KEY
+    # already, but pinning it here documents the dependency and gives one obvious
+    # seam to split token signing onto its own key later (rotate JWT keys without
+    # invalidating Django's SECRET_KEY-derived state).
+    "SIGNING_KEY": SECRET_KEY,
 }
 
 # ---------------------------------------------------------------------------

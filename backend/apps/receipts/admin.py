@@ -44,11 +44,15 @@ class ReceiptAdmin(admin.ModelAdmin):
 
     Shows the workflow status in the changelist, allows filtering by status and
     supplier, and embeds photos and lines as inlines for one-page inspection.
+    ``recognized_supplier`` (the raw OCR supplier dict) is read-only because it is
+    the immutable detection audit record — editing it would corrupt the audit
+    trail of why a supplier was auto-detected.
     """
 
     list_display = ("id", "supplier", "status", "created_by", "created_at")
     list_filter = ("status", "supplier")
     search_fields = ("supplier__name", "created_by")
+    readonly_fields = ("recognized_supplier",)
     inlines = (ReceiptPhotoInline, ReceiptLineInline)
 
 

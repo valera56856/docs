@@ -227,9 +227,13 @@ export const authApi = {
   pin: (email: string, pin: string) =>
     api.post<TokenPair>('/auth/pin/', { email, pin }, { auth: false }),
 
-  /** Exchange a refresh token for a new access token. */
+  /**
+   * Exchange a refresh token for a new access token. With server-side rotation
+   * ON, the response also carries a NEW refresh token (the old one is
+   * blacklisted), so callers must persist `refresh` when present.
+   */
   refresh: (refresh: string) =>
-    api.post<{ access: string }>(
+    api.post<{ access: string; refresh?: string }>(
       '/auth/refresh/',
       { refresh },
       { auth: false },
@@ -245,6 +249,9 @@ export const authApi = {
    * @param pin - Exactly four digits. Never logged or persisted in plaintext.
    */
   setPin: (pin: string) => api.post<void>('/auth/set-pin/', { pin }),
+
+  /** Blacklist the given refresh token server-side (best-effort logout). */
+  logout: (refresh: string) => api.post<void>('/auth/logout/', { refresh }),
 };
 
 /**
@@ -402,12 +409,34 @@ export const mappings = {
 /** Receipt lifecycle calls. */
 export const receipts = {
   /**
-   * Create a draft receipt for a supplier.
+   * Create a draft receipt.
    *
+   * The supplier is now **optional** so the scan-first flow can create a draft
+   * with no supplier (recognition auto-detects it from the invoice header). Pass
+   * a `supplierId` only for the legacy "pick a supplier first" path; omit it to
+   * start a scan-first draft (the backend accepts `{}` / `{"supplier": null}`).
+   *
+   * @param supplierId - The chosen supplier's id, or omit for a scan-first draft.
+   */
+  create: (supplierId?: number) =>
+    api.post<Receipt>(
+      '/receipts/',
+      supplierId === undefined ? {} : { supplier: supplierId },
+    ),
+
+  /**
+   * Set (or change) the receipt's supplier (`PATCH /api/receipts/{id}/`).
+   *
+   * Used both when recognition could not determine the supplier (the operator
+   * picks it) and to correct an auto-detected one. On the backend this re-runs
+   * mapping for the existing lines under the new supplier and recomputes the
+   * receipt status, so we return the fully refreshed {@link Receipt}.
+   *
+   * @param id - Receipt id.
    * @param supplierId - The chosen supplier's id.
    */
-  create: (supplierId: number) =>
-    api.post<Receipt>('/receipts/', { supplier: supplierId }),
+  setSupplier: (id: number, supplierId: number) =>
+    api.patch<Receipt>(`/receipts/${id}/`, { supplier: supplierId }),
 
   /** Fetch a receipt with its nested photos + lines. */
   get: (id: number) => api.get<Receipt>(`/receipts/${id}/`),

@@ -64,6 +64,46 @@ function dataUrlToFile(dataUrl: string, filename: string): File {
 }
 
 /**
+ * Encode a `<canvas>` frame to a JPEG {@link File} for the upload path.
+ *
+ * Used by the in-app camera (`CameraCapture`): the live `<video>` frame is drawn
+ * to an offscreen canvas, then handed here. We go through `toBlob` (async, off
+ * the main-thread encoder) rather than `toDataURL` (sync, base64, ~33% larger)
+ * so a full-resolution warehouse photo doesn't jank the UI on capture.
+ *
+ * The result is a real `image/jpeg` `File`, identical in shape to what
+ * {@link capturePhoto} returns, so it feeds the SAME `receipts.uploadPhoto`
+ * path with no special-casing downstream.
+ *
+ * @param canvas - A canvas already painted with the frame to capture.
+ * @param quality - JPEG quality 0–1. Defaults to 0.9 — high enough for OCR
+ *   legibility, low enough to keep uploads small on a flaky connection.
+ * @param filename - Name to assign the resulting file.
+ * @returns A `Promise` resolving to the JPEG {@link File}.
+ * @throws Error if the browser fails to encode the canvas (rare; surfaced so the
+ *   caller can toast and let the operator retry the shot).
+ */
+export function canvasToJpegFile(
+  canvas: HTMLCanvasElement,
+  quality = 0.9,
+  filename = `invoice-${Date.now()}.jpg`,
+): Promise<File> {
+  return new Promise<File>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('Не вдалося обробити знімок камери.'));
+          return;
+        }
+        resolve(new File([blob], filename, { type: 'image/jpeg' }));
+      },
+      'image/jpeg',
+      quality,
+    );
+  });
+}
+
+/**
  * Capture a photo on the native (Capacitor) path.
  *
  * @param quality - JPEG quality 0–100.

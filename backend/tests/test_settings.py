@@ -331,7 +331,11 @@ def test_test_connection_failure_returns_200_with_error(
     assert response.status_code == 200
     assert response.data["ok"] is False
     assert response.data["product_count"] is None
-    assert "boom" in response.data["error"]
+    # H3: the client-facing error is GENERIC — the internal exception text must
+    # not leak (it would act as an SSRF / network oracle). Server logs keep the
+    # real cause; the response carries only the fixed friendly message.
+    assert response.data["error"] == "Не вдалося підключитися до SalesDrive"
+    assert "boom" not in response.data["error"]
 
 
 @pytest.mark.django_db

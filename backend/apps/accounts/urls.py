@@ -8,6 +8,7 @@ are relative to that prefix:
 * ``pin/``      to :class:`PinLoginView` (PIN to JWT)
 * ``me/``       to :class:`MeView` (current profile summary)
 * ``set-pin/``  to :class:`SetPinView` (set/replace the caller's PIN)
+* ``logout/``   to :class:`LogoutView` (blacklist a refresh token)
 """
 
 from __future__ import annotations
@@ -15,7 +16,13 @@ from __future__ import annotations
 from django.urls import path
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .views import EmailTokenObtainPairView, MeView, PinLoginView, SetPinView
+from .views import (
+    EmailTokenObtainPairView,
+    LogoutView,
+    MeView,
+    PinLoginView,
+    SetPinView,
+)
 
 app_name = "accounts"
 
@@ -25,4 +32,5 @@ urlpatterns = [
     path("pin/", PinLoginView.as_view(), name="pin"),
     path("me/", MeView.as_view(), name="me"),
     path("set-pin/", SetPinView.as_view(), name="set-pin"),
+    path("logout/", LogoutView.as_view(), name="logout"),
 ]

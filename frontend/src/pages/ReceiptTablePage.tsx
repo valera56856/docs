@@ -2,6 +2,10 @@
  * ReceiptTablePage — the heart of the app.
  *
  * Shows the recognized invoice lines for a receipt and lets the operator:
+ * - see the **auto-detected supplier** (header card) and change it if the
+ *   recognition got it wrong, or pick one when it could not be determined
+ *   (opens {@link SupplierPickerSheet} → `receipts.setSupplier`, which re-runs
+ *   mapping for the lines under the new supplier),
  * - map an unmapped line to a catalog product (opens {@link MappingSheet}),
  * - edit quantity / price inline (PATCH the line on commit),
  * and, once the receipt is `ready`, proceed to Excel generation.
@@ -14,7 +18,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { FileSpreadsheet, Link2, RotateCcw } from 'lucide-react';
+import {
+  Building2,
+  FileSpreadsheet,
+  Link2,
+  Pencil,
+  RotateCcw,
+} from 'lucide-react';
 
 import { receipts as receiptsApi, lines as linesApi } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
@@ -26,8 +36,15 @@ import { StatusBadge } from '@/components/ui/StatusBadge';
 import { ThemeToggle } from '@/components/ThemeProvider';
 import { useToast } from '@/components/ui/Toast';
 import { MappingSheet } from '@/components/MappingSheet';
+import { SupplierPickerSheet } from '@/components/SupplierPickerSheet';
 import { EditableField } from '@/pages/_receipt/EditableField';
-import type { LinePatch, OurProduct, Receipt, ReceiptLine } from '@/types';
+import type {
+  LinePatch,
+  OurProduct,
+  Receipt,
+  ReceiptLine,
+  Supplier,
+} from '@/types';
 
 /** Async state for the receipt screen. */
 type LoadState = 'loading' | 'ready' | 'error';
@@ -48,8 +65,12 @@ export function ReceiptTablePage(): JSX.Element {
 
   const [state, setState] = useState<LoadState>('loading');
   const [receipt, setReceipt] = useState<Receipt | null>(null);
-  /** The line currently being mapped (drives the bottom sheet). */
+  /** The line currently being mapped (drives the mapping bottom sheet). */
   const [activeLine, setActiveLine] = useState<ReceiptLine | null>(null);
+  /** Whether the supplier-picker sheet is open (set/change the supplier). */
+  const [pickingSupplier, setPickingSupplier] = useState(false);
+  /** True while `receipts.setSupplier` is in flight (disables the picker rows). */
+  const [savingSupplier, setSavingSupplier] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   /**
@@ -181,6 +202,44 @@ export function ReceiptTablePage(): JSX.Element {
     [load],
   );
 
+  /**
+   * Set (or change) the receipt's supplier from the picker.
+   *
+   * The backend re-runs `mapping.match_line` for the existing lines under the
+   * new supplier and recomputes the receipt status, returning the refreshed
+   * receipt — so we replace local state with the server's truth rather than
+   * patching it ourselves (the per-line match statuses may all have changed).
+   *
+   * @param supplier - The supplier chosen in the {@link SupplierPickerSheet}.
+   */
+  const chooseSupplier = useCallback(
+    async (supplier: Supplier) => {
+      if (!receipt) {
+        return;
+      }
+      setSavingSupplier(true);
+      try {
+        const updated = await receiptsApi.setSupplier(receipt.id, supplier.id);
+        setReceipt(updated);
+        setPickingSupplier(false);
+        toast({
+          variant: 'success',
+          title: 'Постачальника оновлено',
+          description: supplier.name,
+        });
+      } catch {
+        toast({
+          variant: 'error',
+          title: 'Не вдалося змінити постачальника',
+          description: 'Спробуйте ще раз.',
+        });
+      } finally {
+        setSavingSupplier(false);
+      }
+    },
+    [receipt, toast],
+  );
+
   const isRecognizing = receipt?.status === 'recognizing';
   const isReady = receipt?.status === 'ready' || receipt?.status === 'xlsx_ready';
 
@@ -244,6 +303,69 @@ export function ReceiptTablePage(): JSX.Element {
             ))}
           </ul>
         </div>
+      )}
+
+      {/* Auto-detected supplier header card. Shown once recognition settles —
+          either the detected supplier (name + ЄДРПОУ) with a «Змінити» action,
+          or a "не визначено — оберіть" prompt that opens the same picker. The
+          card adapts to mobile (stacked) and desktop (inline) and reskins in
+          dark/light via tokens. */}
+      {state === 'ready' && receipt && !isRecognizing && (
+        <Card
+          variant="solid"
+          className="flex flex-col gap-[var(--space-3)] p-[var(--space-4)] sm:flex-row sm:items-center sm:justify-between"
+        >
+          {receipt.supplier ? (
+            <div className="flex min-w-0 items-center gap-[var(--space-3)]">
+              <span
+                aria-hidden
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-info-bg)] text-[color:var(--color-blue)]"
+              >
+                <Building2 size={20} aria-hidden />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[length:var(--font-size-xs)] uppercase tracking-[0.03em] text-[color:var(--color-text-muted)]">
+                  Постачальник
+                </p>
+                <p className="truncate font-[var(--font-weight-semibold)] text-[color:var(--color-text)]">
+                  {receipt.supplier.name}
+                  {receipt.supplier.edrpou ? (
+                    <span className="ml-[var(--space-2)] font-[var(--font-weight-normal)] text-[color:var(--color-text-muted)]">
+                      · ЄДРПОУ {receipt.supplier.edrpou}
+                    </span>
+                  ) : null}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex min-w-0 items-center gap-[var(--space-3)]">
+              <span
+                aria-hidden
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-warning-bg)] text-[color:var(--color-warning)]"
+              >
+                <Building2 size={20} aria-hidden />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[length:var(--font-size-xs)] uppercase tracking-[0.03em] text-[color:var(--color-text-muted)]">
+                  Постачальник
+                </p>
+                <p className="font-[var(--font-weight-semibold)] text-[color:var(--color-text)]">
+                  Не визначено — оберіть
+                </p>
+              </div>
+            </div>
+          )}
+
+          <Button
+            intent={receipt.supplier ? 'secondary' : 'primary'}
+            size="sm"
+            onClick={() => setPickingSupplier(true)}
+            className="shrink-0 self-start sm:self-auto"
+          >
+            <Pencil size={16} aria-hidden />
+            {receipt.supplier ? 'Змінити' : 'Обрати'}
+          </Button>
+        </Card>
       )}
 
       {state === 'ready' &&
@@ -482,6 +604,32 @@ export function ReceiptTablePage(): JSX.Element {
           recognizedName={activeLine.recognized_name}
           onMapped={(product) => applyMapping(activeLine.id, product)}
           onClose={() => setActiveLine(null)}
+        />
+      )}
+
+      {/* Supplier-picker bottom-sheet — set/change the receipt's supplier. The
+          description surfaces what recognition read from the header (audit) so
+          the operator can match an undetected supplier by name/ЄДРПОУ. */}
+      {receipt && (
+        <SupplierPickerSheet
+          open={pickingSupplier}
+          title={
+            receipt.supplier ? 'Змінити постачальника' : 'Оберіть постачальника'
+          }
+          description={
+            receipt.recognized_supplier &&
+            (receipt.recognized_supplier.name ||
+              receipt.recognized_supplier.edrpou)
+              ? `Розпізнано: ${receipt.recognized_supplier.name ?? '—'}${
+                  receipt.recognized_supplier.edrpou
+                    ? ` · ЄДРПОУ ${receipt.recognized_supplier.edrpou}`
+                    : ''
+                }`
+              : undefined
+          }
+          saving={savingSupplier}
+          onSelect={(supplier) => void chooseSupplier(supplier)}
+          onClose={() => setPickingSupplier(false)}
         />
       )}
     </main>

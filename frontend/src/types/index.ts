@@ -21,6 +21,12 @@ export type ReceiptStatus =
 export interface Supplier {
   id: number;
   name: string;
+  /**
+   * Ukrainian tax code (ЄДРПОУ) — the reliable supplier key used to auto-detect
+   * the supplier from a scanned invoice header. May be blank when only the name
+   * is known (e.g. a supplier created before edrpou was captured).
+   */
+  edrpou: string;
   note: string;
   is_active: boolean;
   created_at: string;
@@ -62,10 +68,51 @@ export interface ReceiptPhoto {
   image_url: string;
 }
 
+/**
+ * The auto-detected supplier as the recognition serialized it on a receipt.
+ *
+ * A compact summary (not the full {@link Supplier}) because the detail endpoint
+ * nests only what the header card needs: `id`/`name`/`edrpou`. It is `null` on a
+ * scan-first draft until recognition (or a manual pick) resolves the supplier.
+ */
+export interface ReceiptSupplier {
+  id: number;
+  name: string;
+  /** Ukrainian tax code (ЄДРПОУ); may be blank if the invoice omitted it. */
+  edrpou: string;
+}
+
+/**
+ * The raw OCR supplier dict Gemini extracted from the invoice header.
+ *
+ * Kept for audit (mirrors `Receipt.recognized_supplier` JSON on the backend):
+ * either field may be `null` when the invoice header omitted it. This is the
+ * *recognized* value before it was matched/created into a real {@link Supplier};
+ * the resolved supplier lives in {@link Receipt.supplier}.
+ */
+export interface RecognizedSupplier {
+  /** Supplier name read from the header, or null if absent. */
+  name: string | null;
+  /** ЄДРПОУ read from the header, or null if absent. */
+  edrpou: string | null;
+}
+
 /** A receipt (a recognized invoice) with its lines. Mirrors receipts.Receipt. */
 export interface Receipt {
   id: number;
-  supplier: number;
+  /**
+   * The resolved supplier, nested as `{id,name,edrpou}` — or `null` on a
+   * scan-first draft that has no supplier yet (the operator photographs first
+   * and recognition fills this in, or the operator picks it via
+   * `receipts.setSupplier`).
+   */
+  supplier: ReceiptSupplier | null;
+  /**
+   * The raw OCR supplier dict (audit trail), or `null` when recognition has not
+   * run or the header carried no supplier. Distinct from {@link supplier}, which
+   * is the matched/created record.
+   */
+  recognized_supplier: RecognizedSupplier | null;
   status: ReceiptStatus;
   xlsx_url: string;
   created_by: string;
@@ -191,6 +238,11 @@ export interface SalesDriveTestResult {
 export interface SupplierInput {
   /** Display name of the supplier. */
   name: string;
+  /**
+   * Ukrainian tax code (ЄДРПОУ); optional and may be blank. When set it becomes
+   * the reliable key the recognizer uses to auto-detect this supplier.
+   */
+  edrpou?: string;
   /** Free-form note (e.g. invoice quirks); may be empty. */
   note: string;
   /** Whether the supplier is selectable by operators. */

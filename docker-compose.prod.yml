@@ -224,7 +224,7 @@ configs:
               proxy_set_header Host $$host;
               proxy_set_header X-Real-IP $$remote_addr;
               proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $$scheme;
+              proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
               proxy_read_timeout 90s;
           }
 
@@ -234,7 +234,7 @@ configs:
               proxy_set_header Host $$host;
               proxy_set_header X-Real-IP $$remote_addr;
               proxy_set_header X-Forwarded-For $$proxy_add_x_forwarded_for;
-              proxy_set_header X-Forwarded-Proto $$scheme;
+              proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
           }
 
           # Collected Django static (admin CSS, Swagger UI) — served by
@@ -242,7 +242,7 @@ configs:
           location /static/ {
               proxy_pass http://backend:8000;
               proxy_set_header Host $$host;
-              proxy_set_header X-Forwarded-Proto $$scheme;
+              proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
           }
 
           # Uploaded media fallback when R2 is OFF (FileSystemStorage). When R2
@@ -251,7 +251,7 @@ configs:
           location /media/ {
               proxy_pass http://backend:8000;
               proxy_set_header Host $$host;
-              proxy_set_header X-Forwarded-Proto $$scheme;
+              proxy_set_header X-Forwarded-Proto $$http_x_forwarded_proto;
           }
 
           # Immutable hashed build assets.
@@ -285,8 +285,11 @@ configs:
   caddyfile:
     content: |
       ${DOMAIN} {
+          header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
           reverse_proxy frontend:80
       }
+      # The bare IP must NOT serve the app in cleartext (audit H6) — redirect it
+      # to the canonical HTTPS domain so credentials/JWTs are never sent in plain.
       http://${SERVER_IP} {
-          reverse_proxy frontend:80
+          redir https://${DOMAIN}{uri} permanent
       }

@@ -301,8 +301,9 @@ is the *cost* of the goods in this delivery, not a sale price.
 
 `integrations.gemini` is the single boundary between Valeraup and Google's Gemini
 API. It sends one or more photographed pages of **a single supplier invoice** to
-the `gemini-2.5-flash` model (via the `google-genai` SDK) and returns structured
-line-item dicts.
+the `gemini-2.5-flash` model (via the `google-genai` SDK) and returns one
+structured object carrying both the **detected supplier** (from the invoice
+header) and the **line items** (from the table).
 
 Configuration:
 
@@ -317,48 +318,74 @@ The agreed prompt (`gemini.SYSTEM_PROMPT`, in Ukrainian) is intentionally terse
 and imperative — the model follows short, unambiguous output-shape instructions
 far more reliably than long descriptive ones. It instructs the model to:
 
-- Extract **all** product line items across the supplied page(s).
-- Return **only** a valid JSON array of objects — no prose, no Markdown, nothing
-  before or after the array.
-- Use **exactly** these four fields per object (the contract consumed by
+- Extract the **supplier** from the invoice header (постачальник/продавець name +
+  ЄДРПОУ / код ЄДРПОУ) **and all** product line items across the supplied page(s).
+- Return **only one** valid JSON object — no prose, no Markdown, nothing before
+  or after the object.
+- Shape the object **exactly** like this (the contract consumed by
   `recognize_receipt_task`):
+
+  ```json
+  {
+    "supplier": {"name": "<string|null>", "edrpou": "<string|null>"},
+    "lines": [
+      {"supplier_sku": "<string>", "name": "<string>", "quantity": 0, "price": 0}
+    ]
+  }
+  ```
 
   | Field | Meaning | Type |
   | --- | --- | --- |
-  | `supplier_sku` | supplier's article / product code | string |
-  | `name` | product name | string |
-  | `quantity` | quantity | number |
-  | `price` | unit price / cost | number |
+  | `supplier.name` | supplier / seller name from the header | string |
+  | `supplier.edrpou` | supplier ЄДРПОУ tax code from the header | string of digits |
+  | `lines[].supplier_sku` | supplier's article / product code | string |
+  | `lines[].name` | product name | string |
+  | `lines[].quantity` | quantity | number |
+  | `lines[].price` | unit price / cost | number |
 
-- Put `null` for any value not present on the invoice (so downstream code can
-  tell "OCR could not read it" apart from "value is 0").
+- Put `null` for any value not present on the invoice — including
+  `supplier.name` / `supplier.edrpou` (so downstream code can tell "OCR could not
+  read it" apart from "value is 0", and "no supplier on this invoice" apart from
+  "a supplier with no code").
 - **Never invent** values not visible on the photo.
-- Return an empty array `[]` if there are no line items.
+- Use an empty array `[]` for `lines` when there are no line items.
 
-### 2.2 JSON response handling: fence-strip + retry
+**Why the supplier is read here:** the scan-first flow has no supplier when the
+draft is created — the operator photographs the invoice first. Reading the
+supplier and the lines in the **same** OCR pass keeps them atomic (they come from
+the same photographed invoice) and feeds the auto-detection
+(`apps.suppliers.services.match_or_create_supplier`). Mapping is per-supplier, so
+the detected supplier is what makes the learn-once mapping work.
 
-LLMs frequently wrap JSON in Markdown code fences even when told not to. Parsing
-must never depend on the model obeying the prompt, so the response is handled
-defensively:
+### 2.2 JSON response handling: fence-strip + legacy tolerance + retry
+
+LLMs frequently wrap JSON in Markdown code fences even when told not to, and a
+rolling deploy / prompt iteration may briefly emit the **old bare line array**.
+Parsing must never depend on the model obeying the prompt, so the response is
+handled defensively:
 
 ```mermaid
 flowchart TD
     A["recognize_invoice(images)"] --> K{"GEMINI_API_KEY set?<br/>images non-empty?"}
-    K -- "no" --> Z["log skip → return []"]
+    K -- "no" --> Z["log skip → return {supplier: None, lines: []}"]
     K -- "yes" --> C["_call_gemini → raw text"]
     C --> S["_strip_code_fences<br/>(remove ```json … ```)"]
-    S --> P["json.loads + assert list"]
-    P -- "ok" --> R["return list of dicts"]
-    P -- "JSONDecodeError / ValueError" --> RT{"attempt < 2?"}
+    S --> P["json.loads"]
+    P -- "object" --> O["{supplier, lines}"]
+    P -- "array (legacy)" --> L["wrap → {supplier: None, lines: array}"]
+    P -- "scalar / JSONDecodeError / ValueError" --> RT{"attempt < 2?"}
+    O --> R["return {supplier, lines}"]
+    L --> R
     RT -- "yes (retry once)" --> C
     RT -- "no" --> E["raise ValueError<br/>(unparseable after retry)"]
 ```
 
-Step by step (`recognize_invoice(images, *, model=None)`):
+Step by step (`recognize_invoice(images, *, model=None) -> dict`):
 
 1. **Skip guards.** If `images` is empty, or `settings.GEMINI_API_KEY` is unset
-   (local/dev/CI without a key), it logs `gemini_recognize_skip` and returns `[]`
-   — the pipeline and test suite run with no network access or secrets.
+   (local/dev/CI without a key), it logs `gemini_recognize_skip` and returns the
+   offline sentinel `{"supplier": None, "lines": []}` — the pipeline and test
+   suite run with no network access or secrets.
 2. **Call.** `_call_gemini()` makes the **real `google-genai` call**: it imports
    the SDK **lazily** (`from google import genai` / `from google.genai import
    types`) so the module never fails to import when the package is absent, builds
@@ -370,8 +397,12 @@ Step by step (`recognize_invoice(images, *, model=None)`):
    not installed.
 3. **Fence strip.** `_strip_code_fences()` removes a leading/trailing
    ```` ```json ``` ```` (or bare ```` ``` ````) fence and trims whitespace.
-4. **Parse.** `json.loads`, then assert the result is a `list`; non-dict
-   elements are filtered out so one stray element cannot poison the batch.
+4. **Parse.** `json.loads`, then:
+   - a top-level **object** → `{supplier: <dict|None>, lines: <list of dicts>}`
+     (a non-dict `supplier` is coerced to `None`, non-dict line elements are
+     dropped so one stray element cannot poison the batch);
+   - a top-level **array** (legacy) → wrapped as `{supplier: None, lines: array}`;
+   - anything else (a scalar) → `ValueError`.
 5. **Retry once.** On `JSONDecodeError` / `ValueError`, the call is retried
    **exactly once** (two attempts total) — transient LLM JSON glitches usually
    recover on a re-ask, and capping at one retry bounds cost and latency.
@@ -382,13 +413,16 @@ Step by step (`recognize_invoice(images, *, model=None)`):
 A successful response looks like:
 
 ```json
-[
-  {"supplier_sku": "ABC-123", "name": "Гель-лак рожевий 8ml", "quantity": 12, "price": 95.50},
-  {"supplier_sku": "ABC-777", "name": "Базове покриття 15ml", "quantity": 3,  "price": null}
-]
+{
+  "supplier": {"name": "ТОВ «Демо Постач»", "edrpou": "12345678"},
+  "lines": [
+    {"supplier_sku": "ABC-123", "name": "Гель-лак рожевий 8ml", "quantity": 12, "price": 95.50},
+    {"supplier_sku": "ABC-777", "name": "Базове покриття 15ml", "quantity": 3,  "price": null}
+  ]
+}
 ```
 
-### 2.3 Structured logging and `raw_ocr_json` audit
+### 2.3 Structured logging, supplier + line audit
 
 Every key step emits a structured JSON log line via `logging.getLogger(__name__)`,
 so OCR cost and quality can be audited off-host:
@@ -397,16 +431,19 @@ so OCR cost and quality can be audited off-host:
 | --- | --- |
 | `gemini_recognize_skip` | no images / no API key |
 | `gemini_recognize_request` | request sent (model, image count) |
-| `gemini_recognize_result` | success (line count, attempt number) |
+| `gemini_recognize_result` | success (line count, `supplier_detected` bool, attempt) |
 | `gemini_recognize_parse_error` | a parse attempt failed |
 | `gemini_recognize_failed` | both attempts failed |
 
-In addition, the **per-line raw model output is persisted** for audit. The
-`ReceiptLine.raw_ocr_json` `JSONField` stores what Gemini returned for that line.
-This is the audit trail that lets an operator answer *"why did the system read it
-this way?"* — when a quantity or price looks wrong, the original recognized dict
-is right there next to the (possibly human-edited) `quantity` / `price` columns,
-without having to re-run OCR or dig through logs.
+The result event records only **whether** a supplier was detected
+(`supplier_detected`) — never the raw name/code (that lives in the audit columns,
+not the logs). Two raw model outputs are **persisted** for audit:
+
+- `Receipt.recognized_supplier` (`JSONField`) — the raw supplier dict Gemini read
+  from the header, so an operator can answer *"why was this supplier
+  auto-detected?"* even after the supplier FK is corrected.
+- `ReceiptLine.raw_ocr_json` (`JSONField`) — what Gemini returned for that line,
+  sitting next to the (possibly human-edited) `quantity` / `price` columns.
 
 ### 2.4 How OCR fits the receipt pipeline
 
@@ -416,15 +453,32 @@ without having to re-run OCR or dig through logs.
 1. loads the receipt's photo **bytes** back from `default_storage` server-side
    (`photo.image.open('rb')` — no public URL needed, so a private R2 bucket
    works; unreadable/URL-only photos are skipped with a warning),
-2. calls `gemini.recognize_invoice(images)` (returns `[]` when the API key is
-   unset or there are no images — offline-safe),
-3. deletes any prior lines (idempotency) and creates `ReceiptLine` rows inside a
+2. calls `data = gemini.recognize_invoice(images)` (returns
+   `{"supplier": None, "lines": []}` when the API key is unset or there are no
+   images — offline-safe), then reads `data["lines"]` and `data["supplier"]`,
+3. **auto-detects the supplier**: if the receipt has no supplier yet and OCR read
+   a `supplier` with a name or ЄДРПОУ, it resolves the vendor via
+   `apps.suppliers.services.match_or_create_supplier(name, edrpou, created_by=…)`
+   (match by ЄДРПОУ first, then normalized name, else create) and attaches it. It
+   **always** stores `data["supplier"]` on `receipt.recognized_supplier` for
+   audit, and never overwrites an already-set (operator-chosen) supplier,
+4. deletes any prior lines (idempotency) and creates `ReceiptLine` rows inside a
    transaction (storing each raw dict in `raw_ocr_json`; quantity/price parsed
    with a comma→dot tolerant `_to_decimal`),
-4. runs `apps.mapping.services.match_line` per line (see
-   [docs/MAPPING.md](./MAPPING.md)) and bumps `times_used` on auto-matches,
-5. transitions `Receipt.status` via `recompute_receipt_status`
+5. runs `apps.mapping.services.match_line` per line **only when the receipt has a
+   supplier** (mapping is per-supplier; with no supplier the lines are left
+   unmapped) — see [docs/MAPPING.md](./MAPPING.md) — and bumps `times_used` on
+   auto-matches,
+6. transitions `Receipt.status` via `recompute_receipt_status`
    (`recognizing → needs_mapping` / `ready`), or `error` on any failure.
+
+If a receipt still has **no** supplier after recognition (the header had none, or
+detection was skipped), the operator sets it later with
+`PATCH /api/receipts/{id}/ {"supplier": <id>}`. That endpoint re-runs
+`apps.receipts.services.remap_receipt_lines` for the existing lines under the new
+supplier (a line matching a remembered mapping flips to `auto`) and recomputes the
+status — so picking the right vendor can move a `needs_mapping` receipt straight
+to `ready`. Manually-mapped lines are preserved on a supplier change.
 
 See [docs/ARCHITECTURE.md](./ARCHITECTURE.md) for the full
 photo → OCR → mapping → Excel → SalesDrive flow and the receipt state diagram.

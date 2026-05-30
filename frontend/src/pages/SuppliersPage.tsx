@@ -1,9 +1,14 @@
 /**
- * SuppliersPage — pick the supplier whose invoice you're about to photograph.
+ * SuppliersPage — browse / manage the supplier directory.
  *
- * Loads active suppliers from `GET /api/suppliers/`. Tapping one creates a draft
- * receipt (`POST /api/receipts/`) and navigates to that receipt's camera screen,
- * carrying the new receipt id in the URL.
+ * Since the primary flow is now **scan-first** (the supplier is auto-detected
+ * from the photographed invoice), this screen is no longer the way you *start* a
+ * receipt — it is the directory you browse for management. It still offers the
+ * legacy supplier-first shortcut (tapping a supplier creates a draft pre-bound to
+ * it and jumps to the camera), and a prominent «Нова накладна» CTA at the top
+ * that starts the scan-first flow (no supplier picked) by going to `/receipt/new`.
+ *
+ * Loads active suppliers from `GET /api/suppliers/`.
  *
  * States covered (mobile-first, all via the kit):
  * - loading  -> {@link Skeleton} row placeholders
@@ -14,7 +19,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronRight, RotateCcw, Settings, Store } from 'lucide-react';
+import {
+  ChevronRight,
+  FilePlus2,
+  RotateCcw,
+  Settings,
+  Store,
+} from 'lucide-react';
 
 import {
   authApi,
@@ -117,11 +128,12 @@ export function SuppliersPage(): JSX.Element {
       <header className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-[var(--space-1)]">
           <h1 className="text-[length:var(--font-size-xl)] md:text-[length:var(--font-size-2xl)]">
-            Оберіть постачальника
+            Постачальники
           </h1>
           {/* On desktop a one-line subtitle gives the wider header purpose. */}
           <p className="hidden text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)] md:block">
-            Виберіть постачальника, щоб почати нову накладну.
+            Почніть нову накладну — постачальник визначиться автоматично, — або
+            оберіть конкретного постачальника зі списку.
           </p>
         </div>
         {/* The per-screen controls duplicate the desktop top bar, so hide them
@@ -141,6 +153,18 @@ export function SuppliersPage(): JSX.Element {
           <ThemeToggle />
         </div>
       </header>
+
+      {/* Prominent scan-first CTA: start a receipt WITHOUT picking a supplier —
+          the camera flow auto-detects it from the invoice header. This is the
+          primary action; the supplier list below is the management/legacy path. */}
+      <Button
+        size="lg"
+        fullWidth
+        onClick={() => navigate('/receipt/new')}
+        className="md:w-auto md:self-start"
+      >
+        <FilePlus2 size={20} aria-hidden /> Нова накладна
+      </Button>
 
       {state === 'loading' && (
         <ul
@@ -177,37 +201,51 @@ export function SuppliersPage(): JSX.Element {
       )}
 
       {state === 'ready' && items.length > 0 && (
-        <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-[var(--space-4)] xl:grid-cols-3">
-          {items.map((supplier) => (
-            <li key={supplier.id}>
-              <Card
-                as="button"
-                interactive
-                disabled={creatingId !== null}
-                onClick={() => void pick(supplier)}
-                aria-busy={creatingId === supplier.id}
-                className="flex h-full min-h-[var(--touch-target-min)] items-center justify-between gap-[var(--space-3)] md:min-h-[88px] md:p-[var(--space-5)]"
-              >
-                <span className="flex items-center gap-[var(--space-3)]">
-                  <span
+        <>
+          {/* The list is the directory / supplier-first shortcut — labelled so it
+              reads as secondary to the scan-first CTA above. */}
+          <h2 className="text-[length:var(--font-size-sm)] font-[var(--font-weight-semibold)] uppercase tracking-[0.03em] text-[color:var(--color-text-muted)]">
+            Або оберіть постачальника
+          </h2>
+          <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-[var(--space-4)] xl:grid-cols-3">
+            {items.map((supplier) => (
+              <li key={supplier.id}>
+                <Card
+                  as="button"
+                  interactive
+                  disabled={creatingId !== null}
+                  onClick={() => void pick(supplier)}
+                  aria-busy={creatingId === supplier.id}
+                  className="flex h-full min-h-[var(--touch-target-min)] items-center justify-between gap-[var(--space-3)] md:min-h-[88px] md:p-[var(--space-5)]"
+                >
+                  <span className="flex min-w-0 items-center gap-[var(--space-3)]">
+                    <span
+                      aria-hidden
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-info-bg)] text-[color:var(--color-blue)] md:h-11 md:w-11"
+                    >
+                      <Store size={20} aria-hidden />
+                    </span>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate font-[var(--font-weight-medium)] md:text-[length:var(--font-size-lg)]">
+                        {supplier.name}
+                      </span>
+                      {supplier.edrpou ? (
+                        <span className="text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
+                          ЄДРПОУ {supplier.edrpou}
+                        </span>
+                      ) : null}
+                    </span>
+                  </span>
+                  <ChevronRight
+                    size={20}
                     aria-hidden
-                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-info-bg)] text-[color:var(--color-blue)] md:h-11 md:w-11"
-                  >
-                    <Store size={20} aria-hidden />
-                  </span>
-                  <span className="font-[var(--font-weight-medium)] md:text-[length:var(--font-size-lg)]">
-                    {supplier.name}
-                  </span>
-                </span>
-                <ChevronRight
-                  size={20}
-                  aria-hidden
-                  className="shrink-0 text-[color:var(--color-text-muted)]"
-                />
-              </Card>
-            </li>
-          ))}
-        </ul>
+                    className="shrink-0 text-[color:var(--color-text-muted)]"
+                  />
+                </Card>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </main>
   );

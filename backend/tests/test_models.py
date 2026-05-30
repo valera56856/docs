@@ -40,8 +40,19 @@ def test_supplier_creation_defaults() -> None:
     assert supplier.pk is not None
     assert supplier.is_active is True
     assert supplier.note == ""
+    # ``edrpou`` is optional and defaults to blank (most rows are auto-created).
+    assert supplier.edrpou == ""
     assert supplier.created_at is not None
     assert str(supplier) == "ACME Постачання"
+
+
+@pytest.mark.django_db
+def test_supplier_stores_edrpou() -> None:
+    """``Supplier.edrpou`` persists the Ukrainian tax code key."""
+    supplier = Supplier.objects.create(name="ТОВ Демо", edrpou="12345678")
+
+    supplier.refresh_from_db()
+    assert supplier.edrpou == "12345678"
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +150,36 @@ def test_receipt_status_defaults_to_draft() -> None:
     assert receipt.status == "draft"
     assert receipt.xlsx_url == ""
     assert receipt.created_at is not None
+
+
+@pytest.mark.django_db
+def test_receipt_supplier_is_nullable_for_scan_first() -> None:
+    """A draft may be created with no supplier (scan-first flow).
+
+    The vendor is auto-detected from the photographed invoice on recognition, so
+    the FK must accept ``None`` and ``recognized_supplier`` starts unset.
+    """
+    receipt = Receipt.objects.create(supplier=None)
+
+    assert receipt.pk is not None
+    assert receipt.supplier_id is None
+    assert receipt.recognized_supplier is None
+    assert receipt.status == "draft"
+
+
+@pytest.mark.django_db
+def test_receipt_stores_recognized_supplier_dict() -> None:
+    """``recognized_supplier`` round-trips the raw OCR supplier dict for audit."""
+    receipt = Receipt.objects.create(
+        supplier=None,
+        recognized_supplier={"name": "ТОВ Демо", "edrpou": "12345678"},
+    )
+
+    receipt.refresh_from_db()
+    assert receipt.recognized_supplier == {
+        "name": "ТОВ Демо",
+        "edrpou": "12345678",
+    }
 
 
 @pytest.mark.django_db

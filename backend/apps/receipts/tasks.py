@@ -7,19 +7,30 @@ cycle because Gemini Vision calls take seconds and must not block the API.
 Pipeline performed by the task:
 
 1. Load the receipt and its photos; mark it ``recognizing``.
-2. Send the photos to Gemini (:func:`integrations.gemini.recognize_invoice`).
-3. Create one :class:`~apps.receipts.models.ReceiptLine` per recognized item,
+2. Send the photos to Gemini (:func:`integrations.gemini.recognize_invoice`),
+   which returns ``{"supplier": {...}|None, "lines": [...]}``.
+3. **Auto-detect the supplier.** If the receipt has no supplier yet and OCR read
+   a supplier (a name or ЄДРПОУ), resolve it via
+   :func:`apps.suppliers.services.match_or_create_supplier` and attach it. Always
+   store the raw OCR supplier dict on ``receipt.recognized_supplier`` for audit.
+4. Create one :class:`~apps.receipts.models.ReceiptLine` per recognized item,
    storing the raw OCR JSON for audit.
-4. Auto-match each line against remembered mappings
-   (:func:`apps.mapping.services.match_line`) and bump ``times_used`` on hits.
-5. Set the receipt's final status: ``ready`` if every line matched,
-   ``needs_mapping`` if any line is unmapped, or ``error`` on failure.
+5. Auto-match each line against remembered mappings — but only when the receipt
+   has a supplier (mapping is per-supplier). With no supplier the lines are left
+   unmapped and the receipt settles at ``needs_mapping`` (the operator picks a
+   supplier, which re-runs mapping). On hits, bump ``times_used``.
+6. Set the receipt's final status: ``ready`` if every line matched,
+   ``needs_mapping`` if any line is unmapped / no supplier, or ``error`` on
+   failure.
 
 WHY idempotency:
     Celery may redeliver a task (worker crash, retry). Re-running OCR for a
     receipt that already has lines would duplicate them, so the task deletes any
-    prior lines for the receipt before recreating them. This makes a re-run
-    converge to the same result rather than compounding.
+    prior lines for the receipt before recreating them. Supplier auto-detection
+    is idempotent too: ``match_or_create_supplier`` returns the *same* supplier on
+    a re-run (it matches the row it created), and we only auto-set the supplier
+    when one is not already attached, so a re-run never clobbers an operator's
+    manual supplier choice. This makes a re-run converge rather than compounding.
 """
 
 from __future__ import annotations
@@ -35,6 +46,7 @@ from apps.mapping.models import ArticleMapping
 from apps.mapping.services import match_line
 from apps.receipts.models import Receipt, ReceiptLine
 from apps.receipts.services.status import recompute_receipt_status
+from apps.suppliers.services import match_or_create_supplier
 from integrations import gemini
 
 logger = logging.getLogger(__name__)
@@ -109,13 +121,47 @@ def recognize_receipt_task(receipt_id: int) -> None:
         # Gather the photographed pages by reading their bytes back from storage
         # (Cloudflare R2 in prod, local MEDIA_ROOT in dev) via ``photo.image``.
         # When no readable image is available, ``recognize_invoice`` short-circuits
-        # to ``[]``, keeping the pipeline runnable without storage/credentials.
+        # to the offline sentinel, keeping the pipeline runnable without
+        # storage/credentials.
         images: list[bytes] = _load_photo_bytes(receipt)
 
-        ocr_lines = gemini.recognize_invoice(images)
+        # New OCR contract: a single object {"supplier": {...}|None, "lines": [...]}.
+        data = gemini.recognize_invoice(images)
+        ocr_lines = data["lines"]
+        ocr_supplier = data.get("supplier")
 
         unmapped_count = 0
         with transaction.atomic():
+            # --- Auto-detect the supplier (scan-first flow) ----------------
+            # Only auto-set the supplier when the receipt does not already have
+            # one (never clobber an operator's manual choice on a re-run) and OCR
+            # actually read a supplier name or ЄДРПОУ. ``match_or_create_supplier``
+            # is idempotent, so a redelivered task resolves to the same row.
+            if receipt.supplier_id is None and ocr_supplier and (
+                ocr_supplier.get("name") or ocr_supplier.get("edrpou")
+            ):
+                supplier, was_created = match_or_create_supplier(
+                    ocr_supplier.get("name"),
+                    ocr_supplier.get("edrpou"),
+                    created_by=receipt.created_by,
+                )
+                receipt.supplier = supplier
+                logger.info(
+                    "receipt_supplier_detected",
+                    extra={
+                        "receipt_id": receipt_id,
+                        "supplier_id": supplier.pk,
+                        "supplier_created": was_created,
+                    },
+                )
+
+            # Always record the raw OCR supplier dict for audit, even when it was
+            # empty or the receipt already had a supplier. Persist both fields
+            # together so the row is consistent before lines are (re)built.
+            receipt.recognized_supplier = ocr_supplier
+            receipt.save(update_fields=["supplier", "recognized_supplier"])
+
+            # --- Rebuild lines + run per-supplier mapping -------------------
             # Idempotency: drop any lines from a prior run before recreating.
             receipt.lines.all().delete()
 
@@ -125,7 +171,16 @@ def recognize_receipt_task(receipt_id: int) -> None:
                 quantity = _to_decimal(row.get("quantity"), default=Decimal("0"))
                 price = _to_decimal(row.get("price"), default=None)
 
-                product, status = match_line(receipt.supplier_id, recognized_sku)
+                # Mapping is per-supplier. With no supplier (OCR found none and
+                # the operator hasn't picked one) there is no SKU namespace to
+                # search, so the line stays unmapped — it will be re-mapped when a
+                # supplier is set via PATCH /api/receipts/{id}/.
+                if receipt.supplier_id is None:
+                    product, status = None, "unmapped"
+                else:
+                    product, status = match_line(
+                        receipt.supplier_id, recognized_sku
+                    )
 
                 if status == ArticleMapping.MATCH_AUTO and product is not None:
                     # A remembered mapping resolved this line: count the use so
@@ -150,8 +205,9 @@ def recognize_receipt_task(receipt_id: int) -> None:
 
             # Derive the final status from the freshly-created lines via the
             # shared status-machine helper: ``ready`` only when every line is
-            # mapped, otherwise ``needs_mapping`` (including the no-lines case).
-            # Using the same recompute the views use keeps the rule in one place.
+            # mapped, otherwise ``needs_mapping`` (including the no-lines and
+            # no-supplier cases). Using the same recompute the views use keeps the
+            # rule in one place.
             final_status = recompute_receipt_status(receipt)
 
         logger.info(
@@ -160,6 +216,7 @@ def recognize_receipt_task(receipt_id: int) -> None:
                 "receipt_id": receipt_id,
                 "line_count": len(ocr_lines),
                 "unmapped": unmapped_count,
+                "supplier_id": receipt.supplier_id,
                 "status": final_status,
             },
         )

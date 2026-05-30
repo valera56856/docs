@@ -256,6 +256,9 @@ class SalesDriveTestView(APIView):
     """
 
     permission_classes = [IsAuthenticated, IsAdmin]
+    # Rate-limit the connectivity probe (H1): it triggers an outbound fetch, so
+    # cap it at the ``salesdrive_test`` rate to blunt its use as an SSRF probe.
+    throttle_scope = "salesdrive_test"
 
     @extend_schema(
         request=SalesDriveSettingsSerializer,
@@ -276,7 +279,15 @@ class SalesDriveTestView(APIView):
 
         Returns:
             ``200 OK`` with ``{ok, product_count, error}``. ``ok`` is ``False`` and
-            ``error`` is populated on any fetch/parse failure.
+            ``error`` carries a GENERIC message on any fetch/parse failure.
+
+        Notes:
+            The client-facing ``error`` is intentionally generic (H3). Echoing
+            ``str(exc)`` would leak internal detail (resolved hosts, redirect
+            targets, parser internals) and turn this admin endpoint into an SSRF
+            oracle — distinguishing "blocked private IP" from "connection
+            refused" from "bad XML" probes the internal network. The full
+            exception is logged server-side for operators instead.
         """
 
         serializer = SalesDriveSettingsSerializer(data=request.data)
@@ -285,18 +296,24 @@ class SalesDriveTestView(APIView):
         provided = serializer.validated_data.get("salesdrive_yml_url") or ""
         yml_url = provided or IntegrationSettings.load().salesdrive_yml_url
 
+        # Generic, non-leaky message returned to the client on ANY failure.
+        generic_error = "Не вдалося підключитися до SalesDrive"
+
         try:
             if not yml_url:
                 # No URL anywhere → surface a friendly "result" rather than 400.
                 raise ValueError("URL YML не вказано")
             result = probe_catalog_yml(yml_url)
         except Exception as exc:  # noqa: BLE001 - any failure is a test result
+            # Log the real cause server-side (operators need it to debug); the
+            # response stays generic so it cannot be used as an SSRF/network
+            # oracle. Keep HTTP 200 — a failed test is a result, not a 5xx.
             logger.info(
                 "salesdrive_settings_test_failed",
                 extra={"user_id": request.user.pk, "error": str(exc)},
             )
             return Response(
-                {"ok": False, "product_count": None, "error": str(exc)}
+                {"ok": False, "product_count": None, "error": generic_error}
             )
 
         logger.info(

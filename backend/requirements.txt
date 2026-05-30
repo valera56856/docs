@@ -5,9 +5,11 @@
 # contract. Do NOT bump versions ad hoc.
 
 # --- Core framework & API ---------------------------------------------------
-Django>=5.1,<5.2
+# Django 5.2 LTS (C2): pulls in the security/bugfix line over 5.1.
+Django>=5.2,<5.3
 djangorestframework>=3.15,<3.16
-djangorestframework-simplejwt>=5.3,<6
+# SimpleJWT >=5.3.1 (C2/H7): floor on the patched line; ships token_blacklist.
+djangorestframework-simplejwt>=5.3.1,<6
 
 # --- Async task queue -------------------------------------------------------
 celery>=5.4,<6
@@ -27,7 +29,8 @@ openpyxl>=3.1,<4
 drf-spectacular>=0.27,<0.28
 
 # --- HTTP & external integrations ------------------------------------------
-requests>=2.32,<3
+# requests >=2.32.4 (H7): floor on the line patching the .netrc credential leak.
+requests>=2.32.4,<3
 google-genai>=1.0,<2
 
 # --- Object storage (Cloudflare R2, S3-compatible) -------------------------
@@ -36,7 +39,10 @@ boto3>=1.34,<2
 
 # --- WSGI server & imaging --------------------------------------------------
 gunicorn>=23,<24
-Pillow>=10,<12
+# Pillow >=11 (C2/H7): floor on the line with the decompression/CVE fixes that
+# back the upload decompression-bomb guard (settings MAX_IMAGE_PIXELS + the
+# upload serializer pixel cap).
+Pillow>=11,<12
 
 # --- Static file serving (production) ---------------------------------------
 # WhiteNoise lets gunicorn serve the collected Django static assets (admin CSS,
@@ -47,7 +53,10 @@ Pillow>=10,<12
 whitenoise>=6.6,<7
 
 # --- Structured logging -----------------------------------------------------
-python-json-logger>=2.0,<4
+# Pin BELOW 3.x: python-json-logger 3.x drops the ``pythonjsonlogger.jsonlogger``
+# module path that ``valeraup/settings.py`` LOGGING references
+# (``pythonjsonlogger.jsonlogger.JsonFormatter``), so a 3.x bump breaks logging.
+python-json-logger>=2.0,<3
 
 # --- Dev / test (kept here per manifest; install with the rest in dev) ------
 pytest>=8,<9

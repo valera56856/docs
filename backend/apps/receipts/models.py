@@ -30,9 +30,20 @@ class Receipt(models.Model):
     a terminal failure state.
 
     Attributes:
-        supplier: The vendor this invoice is from. ``PROTECT`` on delete because
-            a supplier with historical receipts must not be silently removable —
-            doing so would orphan financial records.
+        supplier: The vendor this invoice is from, or ``None`` until detected.
+            ``null=True`` because the scan-first flow creates a draft *before* a
+            supplier is known — the operator photographs the invoice and Gemini
+            reads the vendor from the header (see
+            ``apps.receipts.tasks.recognize_receipt_task`` →
+            ``apps.suppliers.services.match_or_create_supplier``). ``PROTECT`` on
+            delete still applies once set, because a supplier with historical
+            receipts must not be silently removable — doing so would orphan
+            financial records.
+        recognized_supplier: The raw OCR supplier dict Gemini returned
+            (``{"name": ..., "edrpou": ...}``), kept verbatim for audit. This is
+            the "why was *this* supplier detected?" record, mirroring
+            :attr:`ReceiptLine.raw_ocr_json` for lines. ``None`` until recognition
+            runs (or when OCR found no supplier on the invoice).
         status: Current workflow stage; one of the values in :attr:`STATUS`.
             Defaults to ``"draft"``.
         xlsx_url: URL of the generated ``.xlsx`` receipt once available; blank
@@ -52,9 +63,14 @@ class Receipt(models.Model):
 
     supplier = models.ForeignKey(
         "suppliers.Supplier",
+        null=True,
+        blank=True,
         on_delete=models.PROTECT,
         related_name="receipts",
     )
+    # Raw OCR supplier dict for audit — never the mapping target, just the record
+    # of what Gemini read from the invoice header. Mirrors ReceiptLine.raw_ocr_json.
+    recognized_supplier = models.JSONField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS, default="draft")
     xlsx_url = models.URLField(blank=True)
     created_by = models.CharField(max_length=255, blank=True)
