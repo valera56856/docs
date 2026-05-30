@@ -113,10 +113,20 @@ export function SuppliersPage(): JSX.Element {
   );
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)]">
+    <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)] md:max-w-screen-lg md:gap-[var(--space-6)] md:px-[var(--space-6)] md:py-[var(--space-8)] xl:max-w-screen-xl">
       <header className="flex items-center justify-between gap-2">
-        <h1 className="text-[length:var(--font-size-xl)]">Оберіть постачальника</h1>
-        <div className="flex items-center gap-1">
+        <div className="flex flex-col gap-[var(--space-1)]">
+          <h1 className="text-[length:var(--font-size-xl)] md:text-[length:var(--font-size-2xl)]">
+            Оберіть постачальника
+          </h1>
+          {/* On desktop a one-line subtitle gives the wider header purpose. */}
+          <p className="hidden text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)] md:block">
+            Виберіть постачальника, щоб почати нову накладну.
+          </p>
+        </div>
+        {/* The per-screen controls duplicate the desktop top bar, so hide them
+            on lg+ (where AppShell supplies them) but keep them on mobile. */}
+        <div className="flex items-center gap-1 lg:hidden">
           {isAdmin && (
             <Button
               intent="ghost"
@@ -133,10 +143,13 @@ export function SuppliersPage(): JSX.Element {
       </header>
 
       {state === 'loading' && (
-        <ul className="flex flex-col gap-2" aria-hidden>
-          {Array.from({ length: 5 }).map((_, i) => (
+        <ul
+          className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-[var(--space-4)] xl:grid-cols-3"
+          aria-hidden
+        >
+          {Array.from({ length: 6 }).map((_, i) => (
             <li key={i}>
-              <Skeleton height={64} className="w-full" />
+              <Skeleton height={72} className="w-full" />
             </li>
           ))}
         </ul>
@@ -164,7 +177,7 @@ export function SuppliersPage(): JSX.Element {
       )}
 
       {state === 'ready' && items.length > 0 && (
-        <ul className="flex flex-col gap-2">
+        <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 md:gap-[var(--space-4)] xl:grid-cols-3">
           {items.map((supplier) => (
             <li key={supplier.id}>
               <Card
@@ -173,15 +186,16 @@ export function SuppliersPage(): JSX.Element {
                 disabled={creatingId !== null}
                 onClick={() => void pick(supplier)}
                 aria-busy={creatingId === supplier.id}
-                className="flex min-h-[var(--touch-target-min)] items-center justify-between gap-[var(--space-3)]"
+                className="flex h-full min-h-[var(--touch-target-min)] items-center justify-between gap-[var(--space-3)] md:min-h-[88px] md:p-[var(--space-5)]"
               >
                 <span className="flex items-center gap-[var(--space-3)]">
-                  <Store
-                    size={20}
+                  <span
                     aria-hidden
-                    className="shrink-0 text-[color:var(--color-blue)]"
-                  />
-                  <span className="font-[var(--font-weight-medium)]">
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-info-bg)] text-[color:var(--color-blue)] md:h-11 md:w-11"
+                  >
+                    <Store size={20} aria-hidden />
+                  </span>
+                  <span className="font-[var(--font-weight-medium)] md:text-[length:var(--font-size-lg)]">
                     {supplier.name}
                   </span>
                 </span>

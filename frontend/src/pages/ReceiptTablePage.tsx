@@ -185,12 +185,22 @@ export function ReceiptTablePage(): JSX.Element {
   const isReady = receipt?.status === 'ready' || receipt?.status === 'xlsx_ready';
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)]">
+    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)] md:max-w-screen-lg md:gap-[var(--space-6)] md:px-[var(--space-6)] md:py-[var(--space-8)] xl:max-w-screen-xl">
       <header className="flex items-center justify-between gap-2">
-        <h1 className="text-[length:var(--font-size-xl)]">Позиції накладної</h1>
+        <div className="flex flex-col gap-[var(--space-1)]">
+          <h1 className="text-[length:var(--font-size-xl)] md:text-[length:var(--font-size-2xl)]">
+            Позиції накладної
+          </h1>
+          <p className="hidden text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)] md:block">
+            Перевірте розпізнані рядки, прив’яжіть товари та згенеруйте Excel.
+          </p>
+        </div>
         <div className="flex items-center gap-[var(--space-2)]">
           {receipt && <StatusBadge receipt={receipt.status} />}
-          <ThemeToggle />
+          {/* AppShell supplies the toggle on desktop. */}
+          <span className="lg:hidden">
+            <ThemeToggle />
+          </span>
         </div>
       </header>
 
@@ -256,91 +266,210 @@ export function ReceiptTablePage(): JSX.Element {
         )}
 
       {state === 'ready' && receipt && !isRecognizing && receipt.lines.length > 0 && (
-        <ul className="flex flex-col gap-[var(--space-3)]">
-          {receipt.lines.map((line) => (
-            <Card
-              as="li"
-              variant="solid"
-              key={line.id}
-              className="flex flex-col gap-[var(--space-3)] p-[var(--space-4)]"
-            >
-              <div className="flex items-start justify-between gap-[var(--space-3)]">
-                <div className="min-w-0">
-                  <p className="truncate font-[var(--font-weight-semibold)] leading-[var(--line-height-snug)]">
-                    {line.recognized_name || line.recognized_sku}
-                  </p>
-                  <p className="mt-[2px] text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
-                    Артикул: {line.recognized_sku || '—'}
-                  </p>
+        <>
+          {/* MOBILE: stacked line cards (unchanged) — the polished phone view. */}
+          <ul className="flex flex-col gap-[var(--space-3)] md:hidden">
+            {receipt.lines.map((line) => (
+              <Card
+                as="li"
+                variant="solid"
+                key={line.id}
+                className="flex flex-col gap-[var(--space-3)] p-[var(--space-4)]"
+              >
+                <div className="flex items-start justify-between gap-[var(--space-3)]">
+                  <div className="min-w-0">
+                    <p className="truncate font-[var(--font-weight-semibold)] leading-[var(--line-height-snug)]">
+                      {line.recognized_name || line.recognized_sku}
+                    </p>
+                    <p className="mt-[2px] text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
+                      Артикул: {line.recognized_sku || '—'}
+                    </p>
+                  </div>
+                  <StatusBadge match={line.match_status} className="shrink-0" />
                 </div>
-                <StatusBadge match={line.match_status} className="shrink-0" />
-              </div>
 
-              {/* Mapped product (target catalog item) — set off in a tinted
-                  rail so the supplier→catalog link reads at a glance. */}
-              {line.matched_product && (
-                <p className="flex items-baseline gap-[var(--space-2)] rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--font-size-sm)]">
-                  <span
-                    aria-hidden
-                    className="text-[color:var(--color-blue)] font-[var(--font-weight-semibold)]"
-                  >
-                    →
-                  </span>
-                  <span className="min-w-0">
-                    <span className="font-[var(--font-weight-semibold)]">
-                      {line.matched_product.sku}
-                    </span>{' '}
-                    <span className="text-[color:var(--color-text-muted)]">
-                      {line.matched_product.name}
+                {/* Mapped product (target catalog item) — set off in a tinted
+                    rail so the supplier→catalog link reads at a glance. */}
+                {line.matched_product && (
+                  <p className="flex items-baseline gap-[var(--space-2)] rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--font-size-sm)]">
+                    <span
+                      aria-hidden
+                      className="text-[color:var(--color-blue)] font-[var(--font-weight-semibold)]"
+                    >
+                      →
                     </span>
-                  </span>
-                </p>
-              )}
+                    <span className="min-w-0">
+                      <span className="font-[var(--font-weight-semibold)]">
+                        {line.matched_product.sku}
+                      </span>{' '}
+                      <span className="text-[color:var(--color-text-muted)]">
+                        {line.matched_product.name}
+                      </span>
+                    </span>
+                  </p>
+                )}
 
-              {/* Inline-editable quantity + price + the map action on one row,
-                  so the controls read as a single, intentional toolbar. */}
-              <div className="flex flex-wrap items-end justify-between gap-[var(--space-4)]">
-                <div className="flex items-end gap-[var(--space-5)]">
-                  <EditableField
-                    label="Кількість"
-                    value={line.quantity ?? ''}
-                    inputMode="decimal"
-                    onCommit={(v) => commitEdit(line, 'quantity', v)}
-                  />
-                  <EditableField
-                    label="Ціна"
-                    value={line.price ?? ''}
-                    placeholder="—"
-                    inputMode="decimal"
-                    onCommit={(v) => commitEdit(line, 'price', v)}
-                  />
+                {/* Inline-editable quantity + price + the map action on one row,
+                    so the controls read as a single, intentional toolbar. */}
+                <div className="flex flex-wrap items-end justify-between gap-[var(--space-4)]">
+                  <div className="flex items-end gap-[var(--space-5)]">
+                    <EditableField
+                      label="Кількість"
+                      value={line.quantity ?? ''}
+                      inputMode="decimal"
+                      onCommit={(v) => commitEdit(line, 'quantity', v)}
+                    />
+                    <EditableField
+                      label="Ціна"
+                      value={line.price ?? ''}
+                      placeholder="—"
+                      inputMode="decimal"
+                      onCommit={(v) => commitEdit(line, 'price', v)}
+                    />
+                  </div>
+
+                  <Button
+                    intent={line.match_status === 'unmapped' ? 'primary' : 'secondary'}
+                    size="sm"
+                    onClick={() => setActiveLine(line)}
+                  >
+                    <Link2 size={16} aria-hidden />
+                    {line.match_status === 'unmapped' ? 'Прив’язати' : 'Змінити'}
+                  </Button>
                 </div>
+              </Card>
+            ))}
+          </ul>
 
-                <Button
-                  intent={line.match_status === 'unmapped' ? 'primary' : 'secondary'}
-                  size="sm"
-                  onClick={() => setActiveLine(line)}
-                >
-                  <Link2 size={16} aria-hidden />
-                  {line.match_status === 'unmapped' ? 'Прив’язати' : 'Змінити'}
-                </Button>
-              </div>
-            </Card>
-          ))}
-        </ul>
+          {/* DESKTOP (md+): a real table with aligned tabular numbers. The
+              editable cells reuse {@link EditableField} (label hidden — the
+              column header names it) and the mapped catalog SKU sits under the
+              recognized name so the supplier→catalog link stays visible. */}
+          <div className="hidden overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-sm)] md:block">
+            <table className="w-full border-collapse text-left text-[length:var(--font-size-sm)]">
+              <thead>
+                <tr className="border-b border-[var(--color-border)] bg-[var(--color-surface-muted)] text-[length:var(--font-size-xs)] uppercase tracking-[0.03em] text-[color:var(--color-text-muted)]">
+                  <th scope="col" className="px-[var(--space-4)] py-[var(--space-3)] font-[var(--font-weight-semibold)]">
+                    Артикул постачальника
+                  </th>
+                  <th scope="col" className="px-[var(--space-4)] py-[var(--space-3)] font-[var(--font-weight-semibold)]">
+                    Назва
+                  </th>
+                  <th scope="col" className="px-[var(--space-4)] py-[var(--space-3)] text-right font-[var(--font-weight-semibold)]">
+                    К-ть
+                  </th>
+                  <th scope="col" className="px-[var(--space-4)] py-[var(--space-3)] text-right font-[var(--font-weight-semibold)]">
+                    Ціна
+                  </th>
+                  <th scope="col" className="px-[var(--space-4)] py-[var(--space-3)] font-[var(--font-weight-semibold)]">
+                    Статус
+                  </th>
+                  <th scope="col" className="px-[var(--space-4)] py-[var(--space-3)] text-right font-[var(--font-weight-semibold)]">
+                    Дія
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {receipt.lines.map((line) => (
+                  <tr
+                    key={line.id}
+                    className="border-b border-[var(--color-border)] align-top transition-colors duration-150 last:border-b-0 hover:bg-[var(--color-surface-muted)]"
+                  >
+                    {/* Supplier SKU. */}
+                    <td className="whitespace-nowrap px-[var(--space-4)] py-[var(--space-3)] font-[var(--font-weight-medium)] tabular-nums text-[color:var(--color-text)]">
+                      {line.recognized_sku || '—'}
+                    </td>
+
+                    {/* Recognized name + the mapped catalog product beneath it. */}
+                    <td className="px-[var(--space-4)] py-[var(--space-3)]">
+                      <div className="max-w-[28rem]">
+                        <p className="font-[var(--font-weight-medium)] text-[color:var(--color-text)]">
+                          {line.recognized_name || '—'}
+                        </p>
+                        {line.matched_product && (
+                          <p className="mt-[2px] flex items-baseline gap-[var(--space-1)] text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
+                            <span aria-hidden className="font-[var(--font-weight-semibold)] text-[color:var(--color-blue)]">
+                              →
+                            </span>
+                            <span className="font-[var(--font-weight-semibold)] text-[color:var(--color-text)]">
+                              {line.matched_product.sku}
+                            </span>
+                            <span className="truncate">{line.matched_product.name}</span>
+                          </p>
+                        )}
+                      </div>
+                    </td>
+
+                    {/* Quantity (editable). */}
+                    <td className="px-[var(--space-4)] py-[var(--space-3)] text-right">
+                      <EditableField
+                        label="Кількість"
+                        labelHidden
+                        value={line.quantity ?? ''}
+                        inputMode="decimal"
+                        className="ml-auto w-[6rem]"
+                        onCommit={(v) => commitEdit(line, 'quantity', v)}
+                      />
+                    </td>
+
+                    {/* Price (editable). */}
+                    <td className="px-[var(--space-4)] py-[var(--space-3)] text-right">
+                      <EditableField
+                        label="Ціна"
+                        labelHidden
+                        value={line.price ?? ''}
+                        placeholder="—"
+                        inputMode="decimal"
+                        className="ml-auto w-[6rem]"
+                        onCommit={(v) => commitEdit(line, 'price', v)}
+                      />
+                    </td>
+
+                    {/* Status badge. */}
+                    <td className="px-[var(--space-4)] py-[var(--space-3)]">
+                      <StatusBadge match={line.match_status} />
+                    </td>
+
+                    {/* Map / change action. */}
+                    <td className="px-[var(--space-4)] py-[var(--space-3)] text-right">
+                      <Button
+                        intent={line.match_status === 'unmapped' ? 'primary' : 'secondary'}
+                        size="sm"
+                        onClick={() => setActiveLine(line)}
+                      >
+                        <Link2 size={16} aria-hidden />
+                        {line.match_status === 'unmapped' ? 'Прив’язати' : 'Змінити'}
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
-      {/* Proceed to Excel once the receipt is ready. */}
+      {/* Proceed to Excel once the receipt is ready. Full-width on mobile;
+          a right-aligned action well on desktop so it doesn't stretch across
+          the wide table. */}
       {state === 'ready' && receipt && !isRecognizing && receipt.lines.length > 0 && (
-        <Button
-          size="lg"
-          fullWidth
-          disabled={!isReady}
-          onClick={() => navigate(`/receipt/${receiptId}/generate`)}
-        >
-          <FileSpreadsheet size={20} aria-hidden />
-          {isReady ? 'Згенерувати Excel' : 'Спершу прив’яжіть усі позиції'}
-        </Button>
+        <div className="md:flex md:items-center md:justify-end md:gap-[var(--space-4)] md:border-t md:border-[var(--color-border)] md:pt-[var(--space-5)]">
+          {!isReady && (
+            <p className="hidden text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)] md:block">
+              Прив’яжіть усі позиції, щоб згенерувати файл.
+            </p>
+          )}
+          <Button
+            size="lg"
+            fullWidth
+            disabled={!isReady}
+            onClick={() => navigate(`/receipt/${receiptId}/generate`)}
+            className="md:w-auto"
+          >
+            <FileSpreadsheet size={20} aria-hidden />
+            {isReady ? 'Згенерувати Excel' : 'Спершу прив’яжіть усі позиції'}
+          </Button>
+        </div>
       )}
 
       {/* Mapping bottom-sheet for the active line. */}

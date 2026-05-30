@@ -36,6 +36,18 @@ export interface EditableFieldProps {
   inputMode?: InputHTMLAttributes<HTMLInputElement>['inputMode'];
   /** Disable editing (e.g. while the receipt is read-only). */
   disabled?: boolean;
+  /**
+   * Visually hide the label (still read by screen readers via the wrapping
+   * `<label>`). Used by the desktop table where the column header already names
+   * the field, so a per-cell label would be redundant noise.
+   */
+  labelHidden?: boolean;
+  /**
+   * Override the wrapping label's width/layout classes. Defaults to the
+   * fixed-width stacked layout used by the mobile line cards; the desktop table
+   * passes a full-width class so the input fills its cell.
+   */
+  className?: string;
 }
 
 /**
@@ -51,6 +63,8 @@ export function EditableField({
   placeholder,
   inputMode = 'decimal',
   disabled = false,
+  labelHidden = false,
+  className,
 }: EditableFieldProps): JSX.Element {
   const [draft, setDraft] = useState<string>(value);
   // Track focus so we don't clobber the operator's in-progress edit when the
@@ -72,8 +86,13 @@ export function EditableField({
   }, [draft, value, onCommit]);
 
   return (
-    <label className="flex w-[7rem] flex-col gap-[var(--space-1)]">
-      <span className="text-[length:var(--font-size-xs)] font-[var(--font-weight-medium)] text-[color:var(--color-text-muted)]">
+    <label className={cn('flex flex-col gap-[var(--space-1)]', className ?? 'w-[7rem]')}>
+      <span
+        className={cn(
+          'text-[length:var(--font-size-xs)] font-[var(--font-weight-medium)] text-[color:var(--color-text-muted)]',
+          labelHidden && 'sr-only',
+        )}
+      >
         {label}
       </span>
       <input

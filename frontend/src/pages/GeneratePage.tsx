@@ -105,15 +105,17 @@ export function GeneratePage(): JSX.Element {
   }, [receiptId, toast]);
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-5)] p-[var(--space-4)]">
+    <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-5)] p-[var(--space-4)] md:max-w-xl md:gap-[var(--space-6)] md:py-[var(--space-10)]">
       <header className="flex items-center gap-[var(--space-3)]">
         <FileSpreadsheet
           size={28}
           aria-hidden
-          className="shrink-0 text-[color:var(--color-blue)]"
+          className="shrink-0 text-[color:var(--color-blue)] md:h-8 md:w-8"
         />
         <div>
-          <h1 className="text-[length:var(--font-size-xl)]">Excel-надходження</h1>
+          <h1 className="text-[length:var(--font-size-xl)] md:text-[length:var(--font-size-2xl)]">
+            Excel-надходження
+          </h1>
           {receiptStatus && <StatusBadge receipt={receiptStatus} />}
         </div>
       </header>

@@ -26,6 +26,7 @@ import type { JSX } from 'react';
 
 import { useAuth } from '@/lib/auth';
 import { Spinner } from '@/components/ui/Spinner';
+import { AppShell } from '@/components/AppShell';
 import { LoginPage } from '@/pages/LoginPage';
 import { SuppliersPage } from '@/pages/SuppliersPage';
 import { CameraPage } from '@/pages/CameraPage';
@@ -67,12 +68,21 @@ export const routes: RouteObject[] = [
   { path: '/', element: <LoginPage /> },
   {
     element: <RequireAuth />,
+    // The {@link AppShell} layout route adds the persistent desktop top bar on
+    // lg+ around every authenticated screen; on mobile it is a transparent
+    // passthrough, so the per-screen phone flow is unchanged. Login stays
+    // outside this subtree and therefore gets no chrome.
     children: [
-      { path: '/suppliers', element: <SuppliersPage /> },
-      { path: '/receipt/:id/camera', element: <CameraPage /> },
-      { path: '/receipt/:id', element: <ReceiptTablePage /> },
-      { path: '/receipt/:id/generate', element: <GeneratePage /> },
-      { path: '/admin', element: <AdminPage /> },
+      {
+        element: <AppShell />,
+        children: [
+          { path: '/suppliers', element: <SuppliersPage /> },
+          { path: '/receipt/:id/camera', element: <CameraPage /> },
+          { path: '/receipt/:id', element: <ReceiptTablePage /> },
+          { path: '/receipt/:id/generate', element: <GeneratePage /> },
+          { path: '/admin', element: <AdminPage /> },
+        ],
+      },
     ],
   },
   // Unknown paths fall back to the login / home route.

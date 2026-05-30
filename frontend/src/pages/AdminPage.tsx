@@ -135,24 +135,54 @@ export function AdminPage(): JSX.Element {
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-5)] p-[var(--space-4)]">
+    <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-5)] p-[var(--space-4)] lg:max-w-screen-xl lg:gap-[var(--space-6)] lg:px-[var(--space-6)] lg:py-[var(--space-8)] xl:px-[var(--space-8)]">
       <header className="flex items-center justify-between gap-2">
-        <h1 className="flex items-center gap-2 text-[length:var(--font-size-xl)]">
-          <Settings size={22} aria-hidden className="text-[color:var(--color-blue)]" />
-          Налаштування
-        </h1>
-        <ThemeToggle />
+        <div className="flex flex-col gap-[var(--space-1)]">
+          <h1 className="flex items-center gap-2 text-[length:var(--font-size-xl)] lg:text-[length:var(--font-size-2xl)]">
+            <Settings size={22} aria-hidden className="text-[color:var(--color-blue)]" />
+            Налаштування
+          </h1>
+          <p className="hidden text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)] lg:block">
+            Інтеграція SalesDrive, постачальники та запам’ятовані маппінги.
+          </p>
+        </div>
+        {/* AppShell supplies the toggle on desktop. */}
+        <span className="lg:hidden">
+          <ThemeToggle />
+        </span>
       </header>
 
-      <SalesDriveSection toast={toast} />
-      <SuppliersSection toast={toast} />
-      <MappingsSection toast={toast} />
+      {/*
+       * lg+: two columns — SalesDrive + Постачальники stacked on the left, the
+       * tall Маппінги list on the right — so the wide screen is used calmly
+       * instead of one long centered column. `items-start` lets each column size
+       * to its own content. Mobile keeps the single stacked column.
+       */}
+      <div className="flex flex-col gap-[var(--space-5)] lg:grid lg:grid-cols-2 lg:items-start lg:gap-[var(--space-6)]">
+        <div className="flex flex-col gap-[var(--space-5)] lg:gap-[var(--space-6)]">
+          <SalesDriveSection toast={toast} />
+          <SuppliersSection toast={toast} />
+        </div>
+        <div className="flex flex-col gap-[var(--space-5)]">
+          <MappingsSection toast={toast} />
+        </div>
+      </div>
 
-      <div className="mt-[var(--space-2)] flex flex-col gap-2">
-        <Button intent="secondary" onClick={() => navigate('/suppliers')}>
+      {/* Bottom navigation: a calm row on desktop, stacked on mobile. AppShell
+          already exposes logout on lg+, so hide the redundant logout there. */}
+      <div className="mt-[var(--space-2)] flex flex-col gap-2 lg:flex-row lg:justify-start lg:gap-[var(--space-3)]">
+        <Button
+          intent="secondary"
+          onClick={() => navigate('/suppliers')}
+          className="lg:w-auto"
+        >
           До постачальників
         </Button>
-        <Button intent="ghost" onClick={() => void logout()}>
+        <Button
+          intent="ghost"
+          onClick={() => void logout()}
+          className="lg:hidden"
+        >
           <LogOut size={18} aria-hidden /> Вийти
         </Button>
       </div>

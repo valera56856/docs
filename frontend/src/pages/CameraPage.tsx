@@ -108,10 +108,20 @@ export function CameraPage(): JSX.Element {
   }, [photos.length, receiptId, navigate, toast]);
 
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)]">
+    <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)] md:max-w-2xl md:gap-[var(--space-6)] md:py-[var(--space-8)]">
       <header className="flex items-center justify-between gap-2">
-        <h1 className="text-[length:var(--font-size-xl)]">Фото накладної</h1>
-        <ThemeToggle />
+        <div className="flex flex-col gap-[var(--space-1)]">
+          <h1 className="text-[length:var(--font-size-xl)] md:text-[length:var(--font-size-2xl)]">
+            Фото накладної
+          </h1>
+          <p className="hidden text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)] md:block">
+            Сфотографуйте всі сторінки накладної, потім запустіть розпізнавання.
+          </p>
+        </div>
+        {/* AppShell supplies the toggle on desktop. */}
+        <span className="lg:hidden">
+          <ThemeToggle />
+        </span>
       </header>
 
       {/* Preview strip / empty state */}
@@ -122,7 +132,7 @@ export function CameraPage(): JSX.Element {
           hint="Зробіть фото паперової накладної. Можна додати кілька сторінок."
         />
       ) : (
-        <ul className="grid grid-cols-3 gap-[var(--space-2)]">
+        <ul className="grid grid-cols-3 gap-[var(--space-2)] md:grid-cols-4 md:gap-[var(--space-3)]">
           {photos.map((photo, index) => (
             <li key={photo.imageUrl} className="relative">
               <img
@@ -139,7 +149,7 @@ export function CameraPage(): JSX.Element {
       )}
 
       {/* Capture + recognize controls */}
-      <div className="mt-auto flex flex-col gap-[var(--space-2)]">
+      <div className="mt-auto flex flex-col gap-[var(--space-2)] md:mx-auto md:w-full md:max-w-md">
         <Button
           intent="secondary"
           size="lg"

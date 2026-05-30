@@ -70,7 +70,7 @@ export function LoginPage(): JSX.Element {
   }
 
   return (
-    <main className="relative mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-[var(--space-6)] p-[var(--space-6)]">
+    <main className="relative mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-[var(--space-6)] p-[var(--space-6)] md:max-w-md md:gap-[var(--space-8)]">
       {/* Theme toggle floats top-right so the brand stays centered. */}
       <div className="absolute right-[var(--space-4)] top-[var(--space-4)]">
         <ThemeToggle />
