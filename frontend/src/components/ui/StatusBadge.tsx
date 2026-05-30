@@ -128,10 +128,19 @@ export function StatusBadge({
     <span
       className={cn(
         'inline-flex items-center gap-1 rounded-[var(--radius-full)]',
-        'px-[var(--space-2)] py-[2px] text-[var(--font-size-xs)] font-[var(--font-weight-medium)]',
+        'px-[var(--space-2)] py-[3px] text-[length:var(--font-size-xs)] font-[var(--font-weight-semibold)]',
+        'ring-1 ring-inset',
         className,
       )}
-      style={{ color: spec.fg, backgroundColor: spec.bg }}
+      // A same-hue inset ring (the foreground at low alpha via color-mix) gives
+      // the pill a crisp edge on both light and dark surfaces without a second
+      // token. Falls back to the bg where color-mix is unsupported.
+      style={{
+        color: spec.fg,
+        backgroundColor: spec.bg,
+        // @ts-expect-error — CSS custom prop for the Tailwind ring color.
+        '--tw-ring-color': `color-mix(in srgb, ${spec.fg} 22%, transparent)`,
+      }}
     >
       <Icon
         size={14}

@@ -29,7 +29,7 @@ export const Large: Story = { args: { size: 48 } };
 
 /** Muted color (e.g. inside a secondary button). */
 export const Muted: Story = {
-  args: { className: 'text-[var(--color-text-muted)]' },
+  args: { className: 'text-[color:var(--color-text-muted)]' },
 };
 
 /** Decorative (no accessible label) — when adjacent text conveys loading. */

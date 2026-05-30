@@ -187,7 +187,7 @@ export function ReceiptTablePage(): JSX.Element {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)]">
       <header className="flex items-center justify-between gap-2">
-        <h1 className="text-[var(--font-size-xl)]">Позиції накладної</h1>
+        <h1 className="text-[length:var(--font-size-xl)]">Позиції накладної</h1>
         <div className="flex items-center gap-[var(--space-2)]">
           {receipt && <StatusBadge receipt={receipt.status} />}
           <ThemeToggle />
@@ -221,7 +221,7 @@ export function ReceiptTablePage(): JSX.Element {
         <div className="flex flex-col gap-[var(--space-3)]">
           <p
             role="status"
-            className="flex items-center gap-[var(--space-2)] text-[var(--color-text-muted)]"
+            className="flex items-center gap-[var(--space-2)] text-[color:var(--color-text-muted)]"
           >
             <Spinner size={18} label={null} />
             Розпізнаємо накладну… Зачекайте кілька секунд.
@@ -256,50 +256,66 @@ export function ReceiptTablePage(): JSX.Element {
         )}
 
       {state === 'ready' && receipt && !isRecognizing && receipt.lines.length > 0 && (
-        <ul className="flex flex-col gap-2">
+        <ul className="flex flex-col gap-[var(--space-3)]">
           {receipt.lines.map((line) => (
-            <Card as="li" key={line.id} className="flex flex-col gap-[var(--space-2)]">
-              <div className="flex items-start justify-between gap-2">
+            <Card
+              as="li"
+              variant="solid"
+              key={line.id}
+              className="flex flex-col gap-[var(--space-3)] p-[var(--space-4)]"
+            >
+              <div className="flex items-start justify-between gap-[var(--space-3)]">
                 <div className="min-w-0">
-                  <p className="truncate font-[var(--font-weight-medium)]">
+                  <p className="truncate font-[var(--font-weight-semibold)] leading-[var(--line-height-snug)]">
                     {line.recognized_name || line.recognized_sku}
                   </p>
-                  <p className="text-[var(--font-size-xs)] text-[var(--color-text-muted)]">
+                  <p className="mt-[2px] text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
                     Артикул: {line.recognized_sku || '—'}
                   </p>
                 </div>
-                <StatusBadge match={line.match_status} />
+                <StatusBadge match={line.match_status} className="shrink-0" />
               </div>
 
-              {/* Mapped product (target catalog item). */}
+              {/* Mapped product (target catalog item) — set off in a tinted
+                  rail so the supplier→catalog link reads at a glance. */}
               {line.matched_product && (
-                <p className="text-[var(--font-size-sm)]">
-                  →{' '}
-                  <span className="font-[var(--font-weight-medium)]">
-                    {line.matched_product.sku}
-                  </span>{' '}
-                  {line.matched_product.name}
+                <p className="flex items-baseline gap-[var(--space-2)] rounded-[var(--radius-sm)] bg-[var(--color-surface-muted)] px-[var(--space-3)] py-[var(--space-2)] text-[length:var(--font-size-sm)]">
+                  <span
+                    aria-hidden
+                    className="text-[color:var(--color-blue)] font-[var(--font-weight-semibold)]"
+                  >
+                    →
+                  </span>
+                  <span className="min-w-0">
+                    <span className="font-[var(--font-weight-semibold)]">
+                      {line.matched_product.sku}
+                    </span>{' '}
+                    <span className="text-[color:var(--color-text-muted)]">
+                      {line.matched_product.name}
+                    </span>
+                  </span>
                 </p>
               )}
 
-              {/* Inline-editable quantity + price. */}
-              <div className="flex flex-wrap items-end gap-[var(--space-4)]">
-                <EditableField
-                  label="Кількість"
-                  value={line.quantity ?? ''}
-                  inputMode="decimal"
-                  onCommit={(v) => commitEdit(line, 'quantity', v)}
-                />
-                <EditableField
-                  label="Ціна"
-                  value={line.price ?? ''}
-                  placeholder="—"
-                  inputMode="decimal"
-                  onCommit={(v) => commitEdit(line, 'price', v)}
-                />
-              </div>
+              {/* Inline-editable quantity + price + the map action on one row,
+                  so the controls read as a single, intentional toolbar. */}
+              <div className="flex flex-wrap items-end justify-between gap-[var(--space-4)]">
+                <div className="flex items-end gap-[var(--space-5)]">
+                  <EditableField
+                    label="Кількість"
+                    value={line.quantity ?? ''}
+                    inputMode="decimal"
+                    onCommit={(v) => commitEdit(line, 'quantity', v)}
+                  />
+                  <EditableField
+                    label="Ціна"
+                    value={line.price ?? ''}
+                    placeholder="—"
+                    inputMode="decimal"
+                    onCommit={(v) => commitEdit(line, 'price', v)}
+                  />
+                </div>
 
-              <div className="flex justify-end">
                 <Button
                   intent={line.match_status === 'unmapped' ? 'primary' : 'secondary'}
                   size="sm"

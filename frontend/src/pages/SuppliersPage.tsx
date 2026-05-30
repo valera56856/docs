@@ -115,7 +115,7 @@ export function SuppliersPage(): JSX.Element {
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)]">
       <header className="flex items-center justify-between gap-2">
-        <h1 className="text-[var(--font-size-xl)]">Оберіть постачальника</h1>
+        <h1 className="text-[length:var(--font-size-xl)]">Оберіть постачальника</h1>
         <div className="flex items-center gap-1">
           {isAdmin && (
             <Button
@@ -179,7 +179,7 @@ export function SuppliersPage(): JSX.Element {
                   <Store
                     size={20}
                     aria-hidden
-                    className="shrink-0 text-[var(--color-blue)]"
+                    className="shrink-0 text-[color:var(--color-blue)]"
                   />
                   <span className="font-[var(--font-weight-medium)]">
                     {supplier.name}
@@ -188,7 +188,7 @@ export function SuppliersPage(): JSX.Element {
                 <ChevronRight
                   size={20}
                   aria-hidden
-                  className="shrink-0 text-[var(--color-text-muted)]"
+                  className="shrink-0 text-[color:var(--color-text-muted)]"
                 />
               </Card>
             </li>

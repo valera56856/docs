@@ -36,6 +36,9 @@ body {
   background-color: var(--color-bg);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Tabular figures keep numeric columns (qty/price) aligned, and Inter's
+     contextual alternates round out the typographic polish. */
+  font-feature-settings: 'cv11', 'ss01';
   /* Ease the whole page between light/dark when ThemeProvider flips the
      `data-theme` attribute (disabled under reduced-motion below). */
   transition: var(--theme-transition);
@@ -94,6 +97,9 @@ h3,
 h4 {
   line-height: var(--line-height-tight);
   font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  color: var(--color-text);
+  text-wrap: balance;
 }
 
 /* ---------------------------------------------------------------------------

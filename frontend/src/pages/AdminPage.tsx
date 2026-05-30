@@ -137,8 +137,8 @@ export function AdminPage(): JSX.Element {
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-5)] p-[var(--space-4)]">
       <header className="flex items-center justify-between gap-2">
-        <h1 className="flex items-center gap-2 text-[var(--font-size-xl)]">
-          <Settings size={22} aria-hidden className="text-[var(--color-blue)]" />
+        <h1 className="flex items-center gap-2 text-[length:var(--font-size-xl)]">
+          <Settings size={22} aria-hidden className="text-[color:var(--color-blue)]" />
           Налаштування
         </h1>
         <ThemeToggle />
@@ -271,8 +271,8 @@ function SalesDriveSection({ toast }: { toast: ToastFn }): JSX.Element {
 
   return (
     <Card variant="solid" className="flex flex-col gap-[var(--space-3)]">
-      <h2 className="flex items-center gap-2 text-[var(--font-size-lg)]">
-        <Plug size={20} aria-hidden className="text-[var(--color-blue)]" />
+      <h2 className="flex items-center gap-2 text-[length:var(--font-size-lg)]">
+        <Plug size={20} aria-hidden className="text-[color:var(--color-blue)]" />
         SalesDrive
       </h2>
 
@@ -348,7 +348,7 @@ function SalesDriveSection({ toast }: { toast: ToastFn }): JSX.Element {
             </div>
           </div>
 
-          <p className="text-[var(--font-size-xs)] text-[var(--color-text-muted)]">
+          <p className="text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
             Останній синк: {formatSyncedAt(data?.last_synced ?? null)} · у кеші{' '}
             {data?.product_count ?? 0} товарів
           </p>
@@ -475,8 +475,8 @@ function SuppliersSection({ toast }: { toast: ToastFn }): JSX.Element {
   return (
     <section className="flex flex-col gap-[var(--space-2)]">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="flex items-center gap-2 text-[var(--font-size-lg)]">
-          <Store size={20} aria-hidden className="text-[var(--color-blue)]" />
+        <h2 className="flex items-center gap-2 text-[length:var(--font-size-lg)]">
+          <Store size={20} aria-hidden className="text-[color:var(--color-blue)]" />
           Постачальники
         </h2>
         <Button size="sm" disabled={state === 'loading'} onClick={openAdd}>
@@ -530,13 +530,13 @@ function SuppliersSection({ toast }: { toast: ToastFn }): JSX.Element {
                 <Store
                   size={16}
                   aria-hidden
-                  className="shrink-0 text-[var(--color-text-muted)]"
+                  className="shrink-0 text-[color:var(--color-text-muted)]"
                 />
                 <span className="min-w-0 flex-1 truncate font-[var(--font-weight-medium)]">
                   {supplier.name}
                 </span>
                 {!supplier.is_active && (
-                  <span className="shrink-0 rounded-[var(--radius-full)] bg-[var(--color-warning-bg)] px-[var(--space-2)] py-[2px] text-[var(--font-size-xs)] text-[var(--color-warning)]">
+                  <span className="shrink-0 rounded-[var(--radius-full)] bg-[var(--color-warning-bg)] px-[var(--space-2)] py-[2px] text-[length:var(--font-size-xs)] text-[color:var(--color-warning)]">
                     Неактивний
                   </span>
                 )}
@@ -700,8 +700,8 @@ function MappingsSection({ toast }: { toast: ToastFn }): JSX.Element {
 
   return (
     <section className="flex flex-col gap-[var(--space-2)]">
-      <h2 className="flex items-center gap-2 text-[var(--font-size-lg)]">
-        <Link2 size={20} aria-hidden className="text-[var(--color-blue)]" />
+      <h2 className="flex items-center gap-2 text-[length:var(--font-size-lg)]">
+        <Link2 size={20} aria-hidden className="text-[color:var(--color-blue)]" />
         Маппінги
       </h2>
 
@@ -780,16 +780,16 @@ function MappingsSection({ toast }: { toast: ToastFn }): JSX.Element {
               className="flex flex-col gap-[var(--space-2)] py-[var(--space-3)]"
             >
               <div className="flex flex-col gap-[2px]">
-                <span className="flex items-center gap-1 text-[var(--font-size-sm)] font-[var(--font-weight-medium)]">
+                <span className="flex items-center gap-1 text-[length:var(--font-size-sm)] font-[var(--font-weight-medium)]">
                   <span className="truncate">{mapping.supplier_sku}</span>
-                  <span aria-hidden className="text-[var(--color-text-muted)]">
+                  <span aria-hidden className="text-[color:var(--color-text-muted)]">
                     →
                   </span>
                   <span className="truncate">
                     {mapping.our_product?.sku ?? '—'}
                   </span>
                 </span>
-                <span className="truncate text-[var(--font-size-xs)] text-[var(--color-text-muted)]">
+                <span className="truncate text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
                   {mapping.our_product?.name ?? 'Без товару'} ·{' '}
                   {mapping.supplier.name} · {mapping.times_used}×
                 </span>
@@ -827,7 +827,7 @@ function MappingsSection({ toast }: { toast: ToastFn }): JSX.Element {
               <CheckCircle2
                 size={14}
                 aria-hidden
-                className="mr-1 inline align-[-2px] text-[var(--color-text-muted)]"
+                className="mr-1 inline align-[-2px] text-[color:var(--color-text-muted)]"
               />
               {retargeting.supplier_sku} · {retargeting.supplier.name}
             </>
@@ -865,11 +865,11 @@ function FilterChip({ label, active, onClick }: FilterChipProps): JSX.Element {
       onClick={onClick}
       className={[
         'shrink-0 whitespace-nowrap rounded-[var(--radius-full)] border',
-        'px-[var(--space-3)] py-[var(--space-1)] text-[var(--font-size-sm)]',
+        'px-[var(--space-3)] py-[var(--space-1)] text-[length:var(--font-size-sm)]',
         'focus-visible:outline-none',
         active
-          ? 'border-[var(--color-blue)] bg-[var(--color-blue)] text-[var(--color-text-inverse)]'
-          : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text)] hover:bg-[var(--color-surface-muted)]',
+          ? 'border-[var(--color-blue)] bg-[var(--color-blue)] text-[color:var(--color-text-inverse)]'
+          : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[color:var(--color-text)] hover:bg-[var(--color-surface-muted)]',
       ].join(' ')}
     >
       {label}

@@ -110,10 +110,10 @@ export function GeneratePage(): JSX.Element {
         <FileSpreadsheet
           size={28}
           aria-hidden
-          className="shrink-0 text-[var(--color-blue)]"
+          className="shrink-0 text-[color:var(--color-blue)]"
         />
         <div>
-          <h1 className="text-[var(--font-size-xl)]">Excel-надходження</h1>
+          <h1 className="text-[length:var(--font-size-xl)]">Excel-надходження</h1>
           {receiptStatus && <StatusBadge receipt={receiptStatus} />}
         </div>
       </header>
@@ -163,19 +163,19 @@ export function GeneratePage(): JSX.Element {
 
           {/* Numbered manual-import instructions — there is no SalesDrive API. */}
           <Card variant="solid" className="flex flex-col gap-[var(--space-3)]">
-            <h2 className="flex items-center gap-[var(--space-2)] text-[var(--font-size-base)] font-[var(--font-weight-semibold)]">
-              <Info size={18} aria-hidden className="text-[var(--color-info)]" />
+            <h2 className="flex items-center gap-[var(--space-2)] text-[length:var(--font-size-base)] font-[var(--font-weight-semibold)]">
+              <Info size={18} aria-hidden className="text-[color:var(--color-info)]" />
               Імпорт у SalesDrive
             </h2>
             <ol className="flex list-none flex-col gap-[var(--space-2)]">
               {IMPORT_STEPS.map((step, index) => (
                 <li
                   key={step}
-                  className="flex items-start gap-[var(--space-2)] text-[var(--font-size-sm)]"
+                  className="flex items-start gap-[var(--space-2)] text-[length:var(--font-size-sm)]"
                 >
                   <span
                     aria-hidden
-                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-full)] bg-[var(--color-info-bg)] text-[var(--font-size-xs)] font-[var(--font-weight-semibold)] text-[var(--color-info)]"
+                    className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-full)] bg-[var(--color-info-bg)] text-[length:var(--font-size-xs)] font-[var(--font-weight-semibold)] text-[color:var(--color-info)]"
                   >
                     {index + 1}
                   </span>

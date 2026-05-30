@@ -32,10 +32,10 @@ export const Glass: Story = {
     variant: 'glass',
     children: (
       <div className="flex flex-col gap-1">
-        <h3 className="text-[var(--font-size-lg)] font-[var(--font-weight-semibold)]">
+        <h3 className="text-[length:var(--font-size-lg)] font-[var(--font-weight-semibold)]">
           Накладна #128
         </h3>
-        <p className="text-[var(--font-size-sm)] text-[var(--color-text-muted)]">
+        <p className="text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)]">
           Liquid Glass — напівпрозора поверхня з розмиттям фону.
         </p>
       </div>
@@ -49,10 +49,10 @@ export const Solid: Story = {
     variant: 'solid',
     children: (
       <div className="flex flex-col gap-1">
-        <h3 className="text-[var(--font-size-lg)] font-[var(--font-weight-semibold)]">
+        <h3 className="text-[length:var(--font-size-lg)] font-[var(--font-weight-semibold)]">
           Solid surface
         </h3>
-        <p className="text-[var(--font-size-sm)] text-[var(--color-text-muted)]">
+        <p className="text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)]">
           Без розмиття — для щільних списків.
         </p>
       </div>
@@ -68,7 +68,7 @@ export const InteractiveRow: Story = {
       <div className="flex items-center gap-[var(--space-3)]">
         <span
           aria-hidden
-          className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-info-bg)] text-[var(--color-info)]"
+          className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-info-bg)] text-[color:var(--color-info)]"
         >
           <Truck size={20} aria-hidden />
         </span>
@@ -76,7 +76,7 @@ export const InteractiveRow: Story = {
           ТОВ «Постачальник»
         </span>
         <StatusBadge receipt="ready" />
-        <ChevronRight size={20} aria-hidden className="text-[var(--color-text-muted)]" />
+        <ChevronRight size={20} aria-hidden className="text-[color:var(--color-text-muted)]" />
       </div>
     ),
   },
@@ -94,10 +94,10 @@ export const GlassOnImage: Story = {
       }}
     >
       <Card {...args}>
-        <h3 className="text-[var(--font-size-lg)] font-[var(--font-weight-semibold)]">
+        <h3 className="text-[length:var(--font-size-lg)] font-[var(--font-weight-semibold)]">
           Frosted glass
         </h3>
-        <p className="text-[var(--font-size-sm)] text-[var(--color-text-muted)]">
+        <p className="text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)]">
           backdrop-filter blur + accent gradient.
         </p>
       </Card>

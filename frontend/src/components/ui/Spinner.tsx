@@ -22,7 +22,7 @@ export interface SpinnerProps {
    * when an adjacent text already conveys the loading state).
    */
   label?: string | null;
-  /** Extra classes (e.g. a color override `text-[var(--color-text-muted)]`). */
+  /** Extra classes (e.g. a color override `text-[color:var(--color-text-muted)]`). */
   className?: string;
 }
 
@@ -46,7 +46,7 @@ export function Spinner({
   return (
     <Loader2
       size={size}
-      className={cn('animate-spin text-[var(--color-blue)]', className)}
+      className={cn('animate-spin text-[color:var(--color-blue)]', className)}
       {...a11y}
     />
   );

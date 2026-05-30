@@ -110,7 +110,7 @@ export function CameraPage(): JSX.Element {
   return (
     <main className="mx-auto flex w-full max-w-md flex-1 flex-col gap-[var(--space-4)] p-[var(--space-4)]">
       <header className="flex items-center justify-between gap-2">
-        <h1 className="text-[var(--font-size-xl)]">Фото накладної</h1>
+        <h1 className="text-[length:var(--font-size-xl)]">Фото накладної</h1>
         <ThemeToggle />
       </header>
 
@@ -130,7 +130,7 @@ export function CameraPage(): JSX.Element {
                 alt={`Сторінка ${index + 1}`}
                 className="aspect-[3/4] w-full rounded-[var(--radius-md)] border border-[var(--color-border)] object-cover"
               />
-              <span className="absolute left-1 top-1 rounded-[var(--radius-full)] bg-[var(--color-navy)] px-[var(--space-2)] py-[1px] text-[var(--font-size-xs)] text-[var(--color-text-inverse)]">
+              <span className="absolute left-1 top-1 rounded-[var(--radius-full)] bg-[var(--color-navy)] px-[var(--space-2)] py-[1px] text-[length:var(--font-size-xs)] text-[color:var(--color-text-inverse)]">
                 {index + 1}
               </span>
             </li>

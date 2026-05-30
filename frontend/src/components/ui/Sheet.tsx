@@ -86,7 +86,7 @@ export const SheetContent = forwardRef<HTMLDivElement, SheetContentProps>(
           'fixed inset-x-0 bottom-0 z-50',
           'flex max-h-[85dvh] flex-col',
           'rounded-t-[var(--radius-lg)] border-t border-[var(--color-border)]',
-          'bg-[var(--color-surface)] text-[var(--color-text)]',
+          'bg-[var(--color-surface)] text-[color:var(--color-text)]',
           'shadow-[var(--shadow-lg)]',
           // Honor the home-indicator safe area at the bottom of the panel.
           'pb-[env(safe-area-inset-bottom)]',
@@ -109,7 +109,7 @@ export const SheetContent = forwardRef<HTMLDivElement, SheetContentProps>(
             className={cn(
               'absolute right-[var(--space-3)] top-[var(--space-3)]',
               'flex h-11 w-11 items-center justify-center rounded-[var(--radius-md)]',
-              'text-[var(--color-text-muted)]',
+              'text-[color:var(--color-text-muted)]',
               'hover:bg-[var(--color-surface-muted)]',
               'focus-visible:outline-none',
             )}
@@ -164,7 +164,7 @@ export function SheetTitle({
   return (
     <Dialog.Title
       className={cn(
-        'text-[var(--font-size-lg)] font-[var(--font-weight-semibold)]',
+        'text-[length:var(--font-size-lg)] font-[var(--font-weight-semibold)]',
         className,
       )}
       {...props}
@@ -185,7 +185,7 @@ export function SheetDescription({
   return (
     <Dialog.Description
       className={cn(
-        'text-[var(--font-size-sm)] text-[var(--color-text-muted)]',
+        'text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)]',
         className,
       )}
       {...props}

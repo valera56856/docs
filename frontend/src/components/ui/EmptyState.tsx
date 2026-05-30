@@ -52,23 +52,25 @@ export function EmptyState({
         className,
       )}
     >
-      {/* Token-tinted icon chip keeps the illustration on-brand and subtle. */}
+      {/* Token-tinted icon chip keeps the illustration on-brand and subtle —
+          a soft info wash + ring reads more intentional than flat grey. */}
       <span
         aria-hidden
         className={cn(
-          'flex h-14 w-14 items-center justify-center rounded-[var(--radius-full)]',
-          'bg-[var(--color-surface-muted)] text-[var(--color-text-muted)]',
+          'flex h-16 w-16 items-center justify-center rounded-[var(--radius-full)]',
+          'bg-[var(--color-info-bg)] text-[color:var(--color-blue)]',
+          'ring-1 ring-inset ring-[var(--color-surface-glass-border,transparent)]',
         )}
       >
         <Icon size={28} aria-hidden />
       </span>
 
-      <h2 className="text-[var(--font-size-lg)] font-[var(--font-weight-semibold)] text-[var(--color-text)]">
+      <h2 className="text-[length:var(--font-size-lg)] font-[var(--font-weight-semibold)] text-[color:var(--color-text)]">
         {title}
       </h2>
 
       {hint && (
-        <p className="max-w-xs text-[var(--font-size-sm)] text-[var(--color-text-muted)]">
+        <p className="max-w-xs text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)]">
           {hint}
         </p>
       )}

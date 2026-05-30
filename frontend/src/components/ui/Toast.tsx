@@ -266,11 +266,11 @@ export function ToastItem({ toast, onDismiss }: ToastItemProps): JSX.Element {
       </span>
 
       <div className="flex min-w-0 flex-1 flex-col gap-[2px]">
-        <p className="text-[var(--font-size-sm)] font-[var(--font-weight-semibold)] text-[var(--color-text)]">
+        <p className="text-[length:var(--font-size-sm)] font-[var(--font-weight-semibold)] text-[color:var(--color-text)]">
           {toast.title}
         </p>
         {toast.description && (
-          <p className="text-[var(--font-size-xs)] text-[var(--color-text-muted)]">
+          <p className="text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
             {toast.description}
           </p>
         )}
@@ -282,7 +282,7 @@ export function ToastItem({ toast, onDismiss }: ToastItemProps): JSX.Element {
         onClick={() => onDismiss(toast.id)}
         className={cn(
           'flex h-11 w-11 shrink-0 items-center justify-center',
-          'rounded-[var(--radius-md)] text-[var(--color-text-muted)]',
+          'rounded-[var(--radius-md)] text-[color:var(--color-text-muted)]',
           'hover:bg-[var(--color-surface-muted)]',
           'focus-visible:outline-none',
         )}

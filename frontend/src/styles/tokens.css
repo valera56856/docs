@@ -18,6 +18,13 @@
  *   "liquid glass" treatment used by `Card` (translucent surface + backdrop
  *   blur + a soft accent gradient + a hairline border). They are tuned per
  *   theme so the glass reads correctly on both a light and a dark backdrop.
+ *
+ * POLISH PASS: the scale was retuned for a more intentional, premium feel — a
+ * stronger display type ramp, layered elevation (instead of one flat border),
+ * an explicit `--color-on-accent` (always-white text on brand fills, fixing the
+ * dim-text-on-blue issue), and a brand gradient kept as an *accent* token so it
+ * is used deliberately (login mark, primary CTA sheen) rather than on every
+ * surface.
  */
 :root {
   /* ---- Brand: navy -> electric blue -> cyan ---- */
@@ -29,20 +36,39 @@
   --color-cyan: #06b6d4;
   --color-cyan-400: #22d3ee;
 
+  /* Brand accent gradient — used DELIBERATELY (login mark, hero CTA sheen,
+     focal accents), not as a wash on every surface. */
+  --gradient-brand: linear-gradient(
+    135deg,
+    var(--color-navy) 0%,
+    var(--color-blue) 55%,
+    var(--color-cyan) 100%
+  );
+  --gradient-brand-soft: linear-gradient(
+    135deg,
+    var(--color-blue) 0%,
+    var(--color-cyan) 100%
+  );
+
   /* ---- Neutrals (slate ramp) ---- */
   --color-white: #ffffff;
-  --color-bg: #f8fafc; /* app background */
+  --color-bg: #f6f8fc; /* app background — a hair cooler/softer than pure slate-50 */
   --color-surface: #ffffff; /* cards, sheets */
-  --color-surface-muted: #f1f5f9;
-  --color-border: #e2e8f0;
-  --color-text: #0f172a; /* primary text */
-  --color-text-muted: #64748b; /* secondary text */
+  --color-surface-muted: #eef2f8;
+  --color-border: #e3e9f2;
+  --color-border-strong: #cdd7e6;
+  --color-text: #0e1a30; /* primary text */
+  --color-text-muted: #5a6b85; /* secondary text */
   --color-text-inverse: #f8fafc; /* text on navy/blue */
+  /* Text that sits on a saturated brand fill (primary button, accent chips).
+     Always near-white so the label stays crisp regardless of theme — fixes the
+     "dim navy text on blue" contrast problem. */
+  --color-on-accent: #ffffff;
 
   /* ---- Semantic / status (mapping + receipt states) ---- */
-  --color-success: #16a34a; /* auto match */
+  --color-success: #15803d; /* auto match */
   --color-success-bg: #dcfce7;
-  --color-warning: #d97706; /* manual / needs attention */
+  --color-warning: #b45309; /* manual / needs attention */
   --color-warning-bg: #fef3c7;
   --color-danger: #dc2626; /* unmapped / error */
   --color-danger-bg: #fee2e2;
@@ -51,18 +77,23 @@
 
   /* ---- Typography ---- */
   --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  --font-size-xs: 0.75rem;
-  --font-size-sm: 0.875rem;
-  --font-size-base: 1rem;
-  --font-size-lg: 1.125rem;
-  --font-size-xl: 1.25rem;
-  --font-size-2xl: 1.5rem;
+  --font-size-xs: 0.75rem; /* 12 */
+  --font-size-sm: 0.8125rem; /* 13 — tighter secondary text */
+  --font-size-base: 0.9375rem; /* 15 — calmer body for a dense, scannable UI */
+  --font-size-lg: 1.0625rem; /* 17 */
+  --font-size-xl: 1.375rem; /* 22 — section / page titles */
+  --font-size-2xl: 1.75rem; /* 28 */
+  --font-size-3xl: 2.25rem; /* 36 — display (login brand) */
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 700;
-  --line-height-tight: 1.2;
-  --line-height-normal: 1.5;
+  --line-height-tight: 1.18;
+  --line-height-snug: 1.35;
+  --line-height-normal: 1.55;
+  /* Negative tracking on large display text reads more refined. */
+  --tracking-tight: -0.02em;
+  --tracking-normal: 0;
 
   /* ---- Spacing scale (4px base) ---- */
   --space-1: 0.25rem;
@@ -72,40 +103,49 @@
   --space-5: 1.25rem;
   --space-6: 1.5rem;
   --space-8: 2rem;
+  --space-10: 2.5rem;
   --space-12: 3rem;
 
   /* ---- Radii ---- */
-  --radius-sm: 0.375rem;
-  --radius-md: 0.5rem;
-  --radius-lg: 0.75rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.125rem; /* hero surfaces (login card) */
   --radius-full: 9999px;
 
-  /* ---- Elevation ---- */
-  --shadow-sm: 0 1px 2px rgba(10, 26, 63, 0.06);
-  --shadow-md: 0 4px 12px rgba(10, 26, 63, 0.1);
-  --shadow-lg: 0 12px 32px rgba(10, 26, 63, 0.16);
+  /* ---- Elevation ----
+   * Layered shadows (a tight contact shadow + a soft ambient one) read more
+   * premium than a single blur. Tuned light so surfaces feel lifted, not heavy. */
+  --shadow-xs: 0 1px 2px rgba(14, 26, 48, 0.05);
+  --shadow-sm: 0 1px 2px rgba(14, 26, 48, 0.06), 0 1px 3px rgba(14, 26, 48, 0.05);
+  --shadow-md: 0 2px 4px rgba(14, 26, 48, 0.05),
+    0 8px 20px rgba(14, 26, 48, 0.09);
+  --shadow-lg: 0 4px 8px rgba(14, 26, 48, 0.06),
+    0 18px 40px rgba(14, 26, 48, 0.14);
+  /* Focused glow under the primary CTA — brand-tinted, very soft. */
+  --shadow-accent: 0 6px 18px rgba(37, 99, 235, 0.28);
 
   /* ---- Interaction ---- */
-  --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.4);
+  --focus-ring: 0 0 0 3px rgba(37, 99, 235, 0.35);
   /* Minimum touch target per WCAG 2.5.5 — mobile is the primary surface. */
   --touch-target-min: 44px;
 
   /* ---- Liquid Glass 2026 (light) ----
-   * A frosted, translucent card surface: a semi-opaque white wash over the app
-   * background, blurred behind, with a faint navy->cyan accent gradient and a
-   * crisp hairline border. Kept as tokens so Card (and any future glass
-   * surface) reskins per-theme without touching component classes. */
-  --surface-glass: rgba(255, 255, 255, 0.72);
-  --surface-glass-border: rgba(10, 26, 63, 0.08);
-  --glass-blur: 14px;
-  --glass-saturate: 140%;
-  --glass-shadow: 0 8px 28px rgba(10, 26, 63, 0.1);
+   * A frosted, translucent card surface. POLISH: the accent gradient is now
+   * barely-there so the glass reads as a clean elevated surface rather than a
+   * blue wash, and the elevation comes from the layered shadow above. */
+  --surface-glass: rgba(255, 255, 255, 0.82);
+  --surface-glass-border: rgba(14, 26, 48, 0.07);
+  --glass-blur: 16px;
+  --glass-saturate: 135%;
+  --glass-shadow: 0 1px 2px rgba(14, 26, 48, 0.05),
+    0 10px 28px rgba(14, 26, 48, 0.08);
   --glass-gradient: linear-gradient(
-    135deg,
-    rgba(37, 99, 235, 0.06) 0%,
-    rgba(6, 182, 212, 0.05) 100%
+    160deg,
+    rgba(37, 99, 235, 0.035) 0%,
+    rgba(6, 182, 212, 0.02) 100%
   );
-  --glass-highlight: rgba(255, 255, 255, 0.6);
+  --glass-highlight: rgba(255, 255, 255, 0.7);
 
   /* ---- Theme transition ----
    * Surfaces ease between light/dark on toggle (suppressed under
@@ -114,7 +154,7 @@
     border-color 200ms ease;
 
   /* The active color scheme — lets the UA paint form controls / scrollbars to
-   * match the theme. Updated by the dark override below. */
+     match the theme. Updated by the dark override below. */
   color-scheme: light;
 }
 
@@ -123,8 +163,9 @@
  *
  * Overrides the SAME variable names as `:root`. ThemeProvider sets
  * `data-theme="dark"` on <html>; everything downstream just reads the vars.
- * Contrast targets: body text (#e6edf7) on the app bg (#070d1c) ≈ 15:1, and on
- * the elevated surface (#0f1d3d) ≈ 12:1 — comfortably past WCAG AA.
+ * POLISH: surfaces now step up in luminance with elevation (bg → surface →
+ * muted) so cards read as layered, not flat; borders are a touch brighter for
+ * definition; the brand stays vivid.
  */
 [data-theme='dark'] {
   /* ---- Brand: brightened a touch so it stays vivid on dark surfaces ---- */
@@ -136,15 +177,29 @@
   --color-cyan: #22d3ee;
   --color-cyan-400: #67e8f9;
 
+  --gradient-brand: linear-gradient(
+    135deg,
+    #0a1a3f 0%,
+    var(--color-blue) 55%,
+    var(--color-cyan) 100%
+  );
+  --gradient-brand-soft: linear-gradient(
+    135deg,
+    var(--color-blue) 0%,
+    var(--color-cyan) 100%
+  );
+
   /* ---- Neutrals (dark slate / navy ramp) ---- */
   --color-white: #ffffff;
-  --color-bg: #070d1c; /* app background — deep navy-black */
-  --color-surface: #0f1d3d; /* cards, sheets — elevated navy */
-  --color-surface-muted: #16264c;
-  --color-border: #243a66;
-  --color-text: #e6edf7; /* primary text */
-  --color-text-muted: #94a7c7; /* secondary text */
+  --color-bg: #060b18; /* app background — deep navy-black */
+  --color-surface: #101d39; /* cards, sheets — elevated navy */
+  --color-surface-muted: #1a2b50;
+  --color-border: #26395f;
+  --color-border-strong: #34497a;
+  --color-text: #e8eef9; /* primary text */
+  --color-text-muted: #95a6c4; /* secondary text */
   --color-text-inverse: #f8fafc; /* text on blue/cyan fills */
+  --color-on-accent: #ffffff;
 
   /* ---- Semantic / status: lift bg toward dark, brighten fg for contrast ---- */
   --color-success: #4ade80;
@@ -157,9 +212,11 @@
   --color-info-bg: #122a52;
 
   /* ---- Elevation: stronger, cooler shadows read better on dark ---- */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.55);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.45), 0 10px 28px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 4px 10px rgba(0, 0, 0, 0.5), 0 20px 44px rgba(0, 0, 0, 0.58);
+  --shadow-accent: 0 6px 20px rgba(59, 130, 246, 0.4);
 
   /* ---- Interaction ---- */
   --focus-ring: 0 0 0 3px rgba(96, 165, 250, 0.5);
@@ -167,17 +224,18 @@
   /* ---- Liquid Glass 2026 (dark) ----
    * On dark, the glass is a translucent navy wash with a brighter hairline so
    * the card edge stays legible, plus a slightly stronger accent gradient. */
-  --surface-glass: rgba(15, 29, 61, 0.6);
-  --surface-glass-border: rgba(148, 167, 199, 0.16);
-  --glass-blur: 16px;
+  --surface-glass: rgba(20, 35, 68, 0.7);
+  --surface-glass-border: rgba(149, 166, 196, 0.16);
+  --glass-blur: 18px;
   --glass-saturate: 130%;
-  --glass-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --glass-shadow: 0 1px 2px rgba(0, 0, 0, 0.45),
+    0 12px 30px rgba(0, 0, 0, 0.5);
   --glass-gradient: linear-gradient(
-    135deg,
-    rgba(59, 130, 246, 0.12) 0%,
-    rgba(34, 211, 238, 0.08) 100%
+    160deg,
+    rgba(59, 130, 246, 0.08) 0%,
+    rgba(34, 211, 238, 0.04) 100%
   );
-  --glass-highlight: rgba(148, 167, 199, 0.12);
+  --glass-highlight: rgba(149, 166, 196, 0.12);
 
   color-scheme: dark;
 }

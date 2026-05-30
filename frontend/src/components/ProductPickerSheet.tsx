@@ -202,10 +202,10 @@ export function ProductPickerSheet({
                       'focus-visible:outline-none disabled:opacity-50',
                     )}
                   >
-                    <span className="font-[var(--font-weight-medium)] text-[var(--color-text)]">
+                    <span className="font-[var(--font-weight-medium)] text-[color:var(--color-text)]">
                       {product.name}
                     </span>
-                    <span className="text-[var(--font-size-xs)] text-[var(--color-text-muted)]">
+                    <span className="text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]">
                       {product.sku}
                     </span>
                   </button>

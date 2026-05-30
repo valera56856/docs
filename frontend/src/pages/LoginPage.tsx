@@ -14,11 +14,12 @@
 import { useState } from 'react';
 import type { FormEvent, JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { KeyRound, LogIn } from 'lucide-react';
+import { KeyRound, LogIn, ScanLine } from 'lucide-react';
 
 import { useAuth } from '@/lib/auth';
 import { ApiError } from '@/lib/api';
 import { Button } from '@/components/ui/Button';
+import { Card } from '@/components/ui/Card';
 import { Input } from '@/components/ui/Input';
 import { ThemeToggle } from '@/components/ThemeProvider';
 
@@ -69,104 +70,163 @@ export function LoginPage(): JSX.Element {
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-[var(--space-6)] p-[var(--space-6)]">
-      <div className="flex justify-end">
+    <main className="relative mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-[var(--space-6)] p-[var(--space-6)]">
+      {/* Theme toggle floats top-right so the brand stays centered. */}
+      <div className="absolute right-[var(--space-4)] top-[var(--space-4)]">
         <ThemeToggle />
       </div>
 
-      <header className="text-center">
-        <h1 className="text-[var(--font-size-2xl)] text-[var(--color-navy)]">
-          Valeraup
-        </h1>
-        <p className="text-[var(--font-size-sm)] text-[var(--color-text-muted)]">
-          Розпізнавання накладних
-        </p>
+      {/* Brand moment: a gradient mark + confident display title. */}
+      <header className="flex flex-col items-center gap-[var(--space-4)] text-center">
+        <span
+          aria-hidden
+          className="flex h-16 w-16 items-center justify-center rounded-[var(--radius-xl)] text-[color:var(--color-on-accent)] shadow-[var(--shadow-accent)]"
+          style={{ backgroundImage: 'var(--gradient-brand)' }}
+        >
+          <ScanLine size={32} strokeWidth={2.25} />
+        </span>
+        <div className="flex flex-col gap-[var(--space-1)]">
+          <h1 className="text-[length:var(--font-size-3xl)] font-[var(--font-weight-bold)] text-[color:var(--color-text)]">
+            Valeraup
+          </h1>
+          <p className="text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)]">
+            Розпізнавання накладних
+          </p>
+        </div>
       </header>
 
-      {/* Mode toggle */}
-      <div className="flex gap-2" role="tablist" aria-label="Спосіб входу">
-        <Button
-          role="tab"
-          aria-selected={mode === 'password'}
-          intent={mode === 'password' ? 'primary' : 'secondary'}
-          fullWidth
-          onClick={() => setMode('password')}
+      <Card variant="glass" className="flex flex-col gap-[var(--space-5)] p-[var(--space-5)]">
+        {/* Segmented control for the auth method — quieter than two CTAs. */}
+        <div
+          className="grid grid-cols-2 gap-1 rounded-[var(--radius-md)] bg-[var(--color-surface-muted)] p-1"
+          role="tablist"
+          aria-label="Спосіб входу"
         >
-          <LogIn size={18} aria-hidden /> Пароль
-        </Button>
-        <Button
-          role="tab"
-          aria-selected={mode === 'pin'}
-          intent={mode === 'pin' ? 'primary' : 'secondary'}
-          fullWidth
-          onClick={() => setMode('pin')}
+          <SegTab
+            label="Пароль"
+            icon={LogIn}
+            active={mode === 'password'}
+            onClick={() => setMode('password')}
+          />
+          <SegTab
+            label="PIN"
+            icon={KeyRound}
+            active={mode === 'pin'}
+            onClick={() => setMode('pin')}
+          />
+        </div>
+
+        <form
+          className="flex flex-col gap-[var(--space-4)]"
+          onSubmit={handleSubmit}
         >
-          <KeyRound size={18} aria-hidden /> PIN
-        </Button>
-      </div>
+          {mode === 'password' ? (
+            <>
+              <Input
+                label="Email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+              <Input
+                label="Пароль"
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </>
+          ) : (
+            <>
+              {/* PIN login still needs the email to identify the profile whose
+                  PIN is checked. On a trusted device this would be prefilled
+                  from the last login (TODO: persist + biometric gate). */}
+              <Input
+                label="Email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+              <Input
+                label="4-значний PIN"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={4}
+                value={code}
+                onChange={(e) =>
+                  setCode(e.target.value.replace(/\D/g, '').slice(0, 4))
+                }
+                required
+              />
+            </>
+          )}
 
-      <form className="flex flex-col gap-[var(--space-4)]" onSubmit={handleSubmit}>
-        {mode === 'password' ? (
-          <>
-            <Input
-              label="Email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-            <Input
-              label="Пароль"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-          </>
-        ) : (
-          <>
-            {/* PIN login still needs the email to identify the profile whose
-                PIN is checked. On a trusted device this would be prefilled
-                from the last login (TODO: persist + biometric gate). */}
-            <Input
-              label="Email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-            />
-            <Input
-              label="4-значний PIN"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={4}
-              value={code}
-              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 4))}
-              required
-            />
-          </>
-        )}
+          {error && (
+            <p
+              role="alert"
+              className="text-[length:var(--font-size-sm)] text-[color:var(--color-danger)]"
+            >
+              {error}
+            </p>
+          )}
 
-        {error && (
-          <p
-            role="alert"
-            className="text-[var(--font-size-sm)] text-[var(--color-danger)]"
-          >
-            {error}
-          </p>
-        )}
-
-        <Button type="submit" size="lg" fullWidth disabled={isSubmitting}>
-          {isSubmitting ? 'Зачекайте…' : 'Увійти'}
-        </Button>
-      </form>
+          <Button type="submit" size="lg" fullWidth disabled={isSubmitting}>
+            {isSubmitting ? 'Зачекайте…' : 'Увійти'}
+          </Button>
+        </form>
+      </Card>
 
       {/* TODO(native): biometric unlock (Face ID / fingerprint) before PIN via
           a Capacitor biometrics plugin on supported devices. */}
     </main>
+  );
+}
+
+/** Props for {@link SegTab} — one segment of the login method control. */
+interface SegTabProps {
+  /** Visible label (also the accessible name). */
+  label: string;
+  /** Leading icon. */
+  icon: typeof LogIn;
+  /** Whether this segment is selected. */
+  active: boolean;
+  /** Activate this segment. */
+  onClick: () => void;
+}
+
+/**
+ * One pill of the login-method segmented control. The active segment gets a
+ * solid surface that "lifts" out of the track; the inactive one is flat text.
+ * Kept above the 44px touch floor for thumb use.
+ *
+ * @param props - {@link SegTabProps}.
+ * @returns The segment button.
+ */
+function SegTab({ label, icon: Icon, active, onClick }: SegTabProps): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onClick}
+      className={[
+        'flex min-h-[40px] items-center justify-center gap-2 rounded-[var(--radius-sm)]',
+        'text-[length:var(--font-size-sm)] font-[var(--font-weight-semibold)]',
+        'transition-[background-color,color,box-shadow] duration-150',
+        'focus-visible:outline-none',
+        active
+          ? 'bg-[var(--color-surface)] text-[color:var(--color-text)] shadow-[var(--shadow-xs)]'
+          : 'bg-transparent text-[color:var(--color-text-muted)] hover:text-[color:var(--color-text)]',
+      ].join(' ')}
+    >
+      <Icon size={16} aria-hidden />
+      {label}
+    </button>
   );
 }

@@ -30,33 +30,40 @@ export const buttonVariants = cva(
     'inline-flex items-center justify-center gap-2',
     'rounded-[var(--radius-md)] font-[var(--font-weight-semibold)]',
     'min-h-[var(--touch-target-min)]',
-    'transition-colors duration-150',
+    'transition-[background-color,box-shadow,color,transform,border-color] duration-150',
+    'active:scale-[0.98]',
     'select-none whitespace-nowrap',
-    'disabled:cursor-not-allowed disabled:opacity-50',
+    'disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100',
     'focus-visible:outline-none',
   ].join(' '),
   {
     variants: {
       /** Visual treatment / semantic weight of the action. */
       intent: {
-        /** Brand-filled call to action (electric blue). */
+        /** Brand-filled call to action (electric blue). ONE per view. The
+            always-white `--color-on-accent` keeps the label crisp, and a soft
+            brand glow lifts it off the surface. */
         primary:
-          'bg-[var(--color-blue)] text-[var(--color-text-inverse)] hover:bg-[var(--color-blue-600)]',
+          'bg-[var(--color-blue)] text-[color:var(--color-on-accent)] shadow-[var(--shadow-accent)] hover:bg-[var(--color-blue-600)]',
         /** Low-emphasis bordered button on the app surface. */
         secondary:
-          'bg-[var(--color-surface)] text-[var(--color-text)] border border-[var(--color-border)] hover:bg-[var(--color-surface-muted)]',
+          'bg-[var(--color-surface)] text-[color:var(--color-text)] border border-[var(--color-border-strong)] shadow-[var(--shadow-xs)] hover:bg-[var(--color-surface-muted)] hover:border-[var(--color-border-strong)]',
         /** Minimal, text-only button (e.g. inline actions). */
         ghost:
-          'bg-transparent text-[var(--color-blue)] hover:bg-[var(--color-info-bg)]',
-        /** Destructive action (e.g. delete / discard). */
+          'bg-transparent text-[color:var(--color-blue)] hover:bg-[var(--color-info-bg)]',
+        /** Destructive action, QUIET by default — a tinted text button, not a
+            loud red fill. Reserve the filled look for the confirm step. */
         danger:
-          'bg-[var(--color-danger)] text-[var(--color-text-inverse)] hover:opacity-90',
+          'bg-transparent text-[color:var(--color-danger)] hover:bg-[var(--color-danger-bg)]',
+        /** Loud destructive fill — for the final confirm only, used sparingly. */
+        'danger-solid':
+          'bg-[var(--color-danger)] text-[color:var(--color-on-accent)] hover:opacity-90',
       },
       /** Control sizing — `lg` is the comfortable mobile default. */
       size: {
-        sm: 'h-11 px-[var(--space-3)] text-[var(--font-size-sm)]',
-        md: 'h-11 px-[var(--space-4)] text-[var(--font-size-base)]',
-        lg: 'h-12 px-[var(--space-5)] text-[var(--font-size-lg)]',
+        sm: 'h-11 px-[var(--space-3)] text-[length:var(--font-size-sm)]',
+        md: 'h-11 px-[var(--space-4)] text-[length:var(--font-size-base)]',
+        lg: 'h-12 px-[var(--space-5)] text-[length:var(--font-size-lg)]',
         /** Square icon-only button; still respects the 44px minimum. */
         icon: 'h-11 w-11 p-0',
       },

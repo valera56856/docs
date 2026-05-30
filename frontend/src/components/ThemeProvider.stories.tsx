@@ -24,10 +24,10 @@ type Story = StoryObj<typeof ThemeToggle>;
 function ToggleWithReadout(): JSX.Element {
   const { theme } = useTheme();
   return (
-    <div className="flex items-center gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)] text-[var(--color-text)]">
+    <div className="flex items-center gap-[var(--space-3)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-[var(--space-4)] text-[color:var(--color-text)]">
       <ThemeToggle />
-      <span className="text-[var(--font-size-sm)] text-[var(--color-text-muted)]">
-        Активна тема: <strong className="text-[var(--color-text)]">{theme}</strong>
+      <span className="text-[length:var(--font-size-sm)] text-[color:var(--color-text-muted)]">
+        Активна тема: <strong className="text-[color:var(--color-text)]">{theme}</strong>
       </span>
     </div>
   );

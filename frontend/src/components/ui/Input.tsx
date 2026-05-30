@@ -68,7 +68,7 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
         <label
           htmlFor={inputId}
           className={cn(
-            'text-[var(--font-size-sm)] font-[var(--font-weight-medium)] text-[var(--color-text)]',
+            'text-[length:var(--font-size-sm)] font-[var(--font-weight-medium)] text-[color:var(--color-text)]',
             labelHidden && 'sr-only',
           )}
         >
@@ -84,16 +84,17 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           className={cn(
             'min-h-[var(--touch-target-min)] w-full rounded-[var(--radius-md)]',
             'border bg-[var(--color-surface)] px-[var(--space-3)]',
-            'text-[var(--font-size-base)] text-[var(--color-text)]',
-            'placeholder:text-[var(--color-text-muted)]',
-            'transition-colors duration-150',
-            'focus-visible:outline-none',
+            'text-[length:var(--font-size-base)] text-[color:var(--color-text)]',
+            'shadow-[var(--shadow-xs)]',
+            'placeholder:text-[color:var(--color-text-muted)]',
+            'transition-[border-color,box-shadow] duration-150',
+            'focus-visible:outline-none focus-visible:border-[var(--color-blue)]',
             'disabled:cursor-not-allowed disabled:opacity-50',
             // Danger border on error, neutral border otherwise. The focus ring
             // is supplied globally by the :focus-visible rule.
             hasError
               ? 'border-[var(--color-danger)]'
-              : 'border-[var(--color-border)]',
+              : 'border-[var(--color-border-strong)]',
             className,
           )}
           {...props}
@@ -105,14 +106,14 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
           <p
             id={messageId}
             role="alert"
-            className="text-[var(--font-size-xs)] text-[var(--color-danger)]"
+            className="text-[length:var(--font-size-xs)] text-[color:var(--color-danger)]"
           >
             {error}
           </p>
         ) : hint ? (
           <p
             id={messageId}
-            className="text-[var(--font-size-xs)] text-[var(--color-text-muted)]"
+            className="text-[length:var(--font-size-xs)] text-[color:var(--color-text-muted)]"
           >
             {hint}
           </p>

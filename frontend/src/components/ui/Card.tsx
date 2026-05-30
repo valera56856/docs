@@ -99,9 +99,10 @@ export const Card = forwardRef<HTMLElement, CardProps>(
         {...buttonType}
         className={cn(
           'rounded-[var(--radius-lg)] border p-[var(--space-4)]',
-          'text-left text-[var(--color-text)]',
-          'transition-[transform,box-shadow,background-color] duration-150',
-          // Solid variant: opaque surface + token border + standard elevation.
+          'text-left text-[color:var(--color-text)]',
+          'transition-[transform,box-shadow,background-color,border-color] duration-150',
+          // Solid variant: opaque surface + hairline border + soft elevation so
+          // the card lifts off the page instead of relying on a heavy outline.
           !isGlass && [
             'bg-[var(--color-surface)] border-[var(--color-border)]',
             'shadow-[var(--shadow-sm)]',
@@ -109,10 +110,10 @@ export const Card = forwardRef<HTMLElement, CardProps>(
           // Interactive affordances: lift on hover, settle on press, focus ring.
           interactive && [
             'block w-full cursor-pointer',
-            'hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)]',
+            'hover:-translate-y-0.5 hover:shadow-[var(--shadow-md)] hover:border-[var(--color-border-strong)]',
             'active:translate-y-0 active:shadow-[var(--shadow-sm)]',
             'focus-visible:outline-none',
-            'disabled:cursor-not-allowed disabled:opacity-50',
+            'disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0',
           ],
           className,
         )}

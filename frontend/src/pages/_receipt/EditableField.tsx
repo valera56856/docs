@@ -72,8 +72,8 @@ export function EditableField({
   }, [draft, value, onCommit]);
 
   return (
-    <label className="flex min-w-[6rem] flex-1 flex-col gap-[var(--space-1)]">
-      <span className="text-[var(--font-size-xs)] font-[var(--font-weight-medium)] text-[var(--color-text-muted)]">
+    <label className="flex w-[7rem] flex-col gap-[var(--space-1)]">
+      <span className="text-[length:var(--font-size-xs)] font-[var(--font-weight-medium)] text-[color:var(--color-text-muted)]">
         {label}
       </span>
       <input
@@ -100,10 +100,12 @@ export function EditableField({
         }}
         className={cn(
           'min-h-[var(--touch-target-min)] w-full rounded-[var(--radius-md)]',
-          'border border-[var(--color-border)] bg-[var(--color-surface)]',
-          'px-[var(--space-3)] text-[var(--font-size-base)] text-[var(--color-text)]',
-          'placeholder:text-[var(--color-text-muted)]',
-          'transition-colors duration-150 focus-visible:outline-none',
+          'border border-[var(--color-border-strong)] bg-[var(--color-surface-muted)]',
+          // Tabular figures so the qty/price columns line up cleanly.
+          'px-[var(--space-3)] text-[length:var(--font-size-base)] tabular-nums text-[color:var(--color-text)]',
+          'placeholder:text-[color:var(--color-text-muted)]',
+          'transition-[border-color,box-shadow] duration-150',
+          'focus-visible:outline-none focus-visible:border-[var(--color-blue)]',
           'disabled:cursor-not-allowed disabled:opacity-50',
         )}
       />
