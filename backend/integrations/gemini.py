@@ -46,6 +46,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any
 
 from django.conf import settings
@@ -298,10 +299,22 @@ def recognize_invoice(images: list[bytes], *, model: str | None = None) -> dict:
         extra={"model": resolved_model, "image_count": len(images)},
     )
 
+    # Distinguish TRANSIENT Gemini failures (503 model-overload, 500/502/504,
+    # 429 rate limit) — which we retry with exponential backoff — from permanent
+    # ones (400/401/403) and JSON parse glitches. Without this a momentary "high
+    # demand" 503 from Google would fail the whole receipt instead of recovering.
+    try:
+        from google.genai import errors as _genai_errors
+
+        _server_error = _genai_errors.ServerError
+        _client_error = _genai_errors.ClientError
+    except Exception:  # pragma: no cover - SDK is present past the key guard
+        _server_error = _client_error = ()
+
     last_error: Exception | None = None
-    # Two attempts total: the initial call plus one retry. LLM JSON glitches are
-    # usually transient, so a single re-ask recovers most of them cheaply.
-    for attempt in range(2):
+    max_attempts = 4
+    backoff = 1.0
+    for attempt in range(max_attempts):
         try:
             raw = _call_gemini(images, resolved_model)
             data = _parse_response(raw)
@@ -319,6 +332,7 @@ def recognize_invoice(images: list[bytes], *, model: str | None = None) -> dict:
             )
             return data
         except (json.JSONDecodeError, ValueError) as exc:
+            # Malformed JSON — a re-ask usually fixes it.
             last_error = exc
             logger.warning(
                 "gemini_recognize_parse_error",
@@ -328,12 +342,35 @@ def recognize_invoice(images: list[bytes], *, model: str | None = None) -> dict:
                     "error": str(exc),
                 },
             )
+        except Exception as exc:  # noqa: BLE001 - classify then re-raise if permanent
+            last_error = exc
+            transient = isinstance(exc, _server_error) or (
+                isinstance(exc, _client_error)
+                and getattr(exc, "code", None) == 429
+            )
+            logger.warning(
+                "gemini_recognize_api_error",
+                extra={
+                    "model": resolved_model,
+                    "attempt": attempt + 1,
+                    "transient": transient,
+                    "error": str(exc)[:200],
+                },
+            )
+            if not transient:
+                # 400/401/403 etc. — retrying will not help; fail fast.
+                break
 
-    # Both attempts failed to yield parseable JSON.
+        # Back off before the next attempt (skip the wait after the last one).
+        if attempt < max_attempts - 1:
+            time.sleep(backoff)
+            backoff *= 2
+
     logger.error(
         "gemini_recognize_failed",
-        extra={"model": resolved_model, "error": str(last_error)},
+        extra={"model": resolved_model, "error": str(last_error)[:200]},
     )
     raise ValueError(
-        "Gemini returned an unparseable response after one retry"
+        "Gemini не зміг розпізнати накладну (тимчасова перевантаженість сервісу "
+        "або помилка). Спробуйте ще раз за кілька секунд."
     ) from last_error

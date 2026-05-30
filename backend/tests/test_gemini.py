@@ -198,8 +198,10 @@ def test_recognize_invoice_tolerates_legacy_array(settings, monkeypatch) -> None
 
 
 def test_recognize_invoice_retries_then_raises(settings, monkeypatch) -> None:
-    """Two unparseable responses raise after exactly one retry."""
+    """Persistent unparseable responses raise after exhausting all attempts."""
     settings.GEMINI_API_KEY = "test-key"
+    # Skip the real exponential backoff so the test is instant.
+    monkeypatch.setattr(gemini.time, "sleep", lambda *_a, **_k: None)
     calls = {"n": 0}
 
     def _bad(images: list[bytes], model: str) -> str:
@@ -210,4 +212,29 @@ def test_recognize_invoice_retries_then_raises(settings, monkeypatch) -> None:
 
     with pytest.raises(ValueError):
         gemini.recognize_invoice([b"image-bytes"])
-    assert calls["n"] == 2  # initial attempt + one retry
+    assert calls["n"] == 4  # initial attempt + 3 retries (max_attempts)
+
+
+def test_recognize_invoice_retries_transient_gemini_error(
+    settings, monkeypatch
+) -> None:
+    """A transient Gemini 503 is retried with backoff and recovers next call."""
+    from google.genai import errors as genai_errors
+
+    settings.GEMINI_API_KEY = "test-key"
+    monkeypatch.setattr(gemini.time, "sleep", lambda *_a, **_k: None)
+    calls = {"n": 0}
+
+    def _flaky(images: list[bytes], model: str) -> str:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise genai_errors.ServerError(
+                503, {"error": {"message": "high demand"}}
+            )
+        return '{"supplier": null, "lines": [{"supplier_sku": "X"}]}'
+
+    monkeypatch.setattr(gemini, "_call_gemini", _flaky)
+
+    data = gemini.recognize_invoice([b"image-bytes"])
+    assert calls["n"] == 2  # failed once, recovered on retry
+    assert data["lines"] == [{"supplier_sku": "X"}]
