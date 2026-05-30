@@ -28,6 +28,7 @@ from apps.accounts.models import Profile
 User = get_user_model()
 
 # Endpoint paths under test. Constants keep a path change to a one-line edit.
+LOGIN_PATH = "/api/auth/login/"
 SET_PIN_PATH = "/api/auth/set-pin/"
 PIN_LOGIN_PATH = "/api/auth/pin/"
 ME_PATH = "/api/auth/me/"
@@ -206,3 +207,45 @@ def test_isadmin_allows_admin_on_protected_view(api_client, monkeypatch) -> None
     response = api_client.post(SYNC_CATALOG_PATH)
     assert response.status_code == 202
     assert response.data["task_id"] == "fake-task-id"
+
+
+# ---------------------------------------------------------------------------
+# Email + password login (EmailTokenObtainPairView)
+# ---------------------------------------------------------------------------
+@pytest.mark.django_db
+def test_email_password_login_returns_jwt_pair(api_client) -> None:
+    """Email + password login mints an access/refresh pair (end-to-end).
+
+    Exercises ``EmailTokenObtainPairSerializer`` through the real endpoint — the
+    login-by-email path. Regression guard: the serializer must authenticate by the
+    resolved username and mint the pair itself, NOT delegate to SimpleJWT's
+    ``validate`` (which reads ``attrs["email"]`` and raised ``KeyError`` → 500).
+    Also asserts the documented case-insensitive email match.
+    """
+    User.objects.create_user(
+        username="loginuser", email="LoginUser@Example.com", password="pass1234"
+    )
+
+    response = api_client.post(
+        LOGIN_PATH,
+        {"email": "loginuser@example.com", "password": "pass1234"},
+        format="json",
+    )
+    assert response.status_code == 200
+    assert "access" in response.data
+    assert "refresh" in response.data
+
+
+@pytest.mark.django_db
+def test_email_password_login_rejects_wrong_password(api_client) -> None:
+    """A wrong password is rejected with a validation error, never a 500."""
+    User.objects.create_user(
+        username="loginuser2", email="u2@example.com", password="pass1234"
+    )
+
+    response = api_client.post(
+        LOGIN_PATH,
+        {"email": "u2@example.com", "password": "WRONG-pass"},
+        format="json",
+    )
+    assert response.status_code in (400, 401)

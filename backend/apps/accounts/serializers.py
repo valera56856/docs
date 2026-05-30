@@ -59,10 +59,12 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
         """Authenticate by email + password and return the token pair.
 
-        We look up the user by a case-insensitive email match, then hand the
-        resolved ``username`` to the parent ``validate`` so SimpleJWT performs the
-        actual password check and token minting (single source of truth for token
-        claims/lifetimes).
+        We look up the user by a case-insensitive email match, verify the password
+        through Django's auth backend (keyed on the real ``USERNAME_FIELD`` — the
+        default backend authenticates by username, not email), then mint the JWT
+        pair via ``get_token``. We deliberately do NOT call ``super().validate``:
+        SimpleJWT reads ``attrs[self.username_field]`` (== ``"email"``), which the
+        resolved attrs don't carry, so delegating would raise ``KeyError``.
 
         Args:
             attrs: Validated input containing ``email`` and ``password``.
@@ -86,13 +88,21 @@ class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
                 {"detail": "Невірний email або пароль."}
             )
 
-        # Delegate password verification + token creation to SimpleJWT by passing
-        # the resolved USERNAME_FIELD value the parent expects.
-        parent_attrs = {
-            User.USERNAME_FIELD: getattr(user, User.USERNAME_FIELD),
-            "password": password,
-        }
-        return super().validate(parent_attrs)
+        # Verify the password via the auth backend, keyed on the real username
+        # (default ModelBackend authenticates by USERNAME_FIELD, not email).
+        auth_user = authenticate(
+            request=self.context.get("request"),
+            **{User.USERNAME_FIELD: user.get_username(), "password": password},
+        )
+        if auth_user is None:
+            raise serializers.ValidationError(
+                {"detail": "Невірний email або пароль."}
+            )
+
+        # Mint the access/refresh pair ourselves (get_token comes from
+        # TokenObtainPairSerializer) — same claims/lifetimes SimpleJWT would issue.
+        refresh = self.get_token(auth_user)
+        return {"refresh": str(refresh), "access": str(refresh.access_token)}
 
 
 class PinLoginSerializer(serializers.Serializer):
