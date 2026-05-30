@@ -1,0 +1,110 @@
+# Valeraup — local/dev Docker Compose stack.
+#
+# Five lean services (per the canonical manifest):
+#   db        — PostgreSQL 16, the single source of truth.
+#   redis     — Celery broker + result backend.
+#   backend   — Django REST API (runs migrations then the dev/prod server).
+#   worker    — Celery worker with EMBEDDED beat (-B) for dev convenience.
+#   frontend  — Vite dev server for the React 19 PWA.
+#
+# NOTE (prod): the `-B` flag embeds Celery beat inside the worker. That is fine
+# for a single-node dev box, but in production beat MUST run as its own service
+# so the schedule is owned by exactly one process (otherwise duplicate periodic
+# tasks fire). Split `worker` into `worker` + `beat` when deploying for real.
+#
+# All backend/worker config comes from backend/.env (env_file). Never commit a
+# real .env — only backend/.env.example with placeholders lives in the repo.
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # POSTGRES_* must agree with DATABASE_URL in backend/.env
+    # (postgres://valeraup:valeraup@db:5432/valeraup).
+    environment:
+      POSTGRES_USER: valeraup
+      POSTGRES_PASSWORD: valeraup
+      POSTGRES_DB: valeraup
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Healthcheck lets `depends_on: condition: service_healthy` gate the backend
+    # until Postgres is actually accepting connections (not just "started").
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U valeraup -d valeraup"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "6379:6379"
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    # Apply migrations on boot, then serve. `runserver` is used for dev (auto
+    # reload); swap to the gunicorn line for a prod-like container.
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py runserver 0.0.0.0:8000"
+    # Prod alternative:
+    #   gunicorn valeraup.wsgi:application --bind 0.0.0.0:8000 --workers 3
+    env_file:
+      - backend/.env
+    volumes:
+      # Bind-mount source for live reload in dev. Drop this in prod images.
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: ./backend
+    restart: unless-stopped
+    # `-B` embeds beat (periodic catalog sync) inside the worker for dev only.
+    # See the top-of-file NOTE about splitting this in production.
+    command: celery -A valeraup worker -B -l info
+    env_file:
+      - backend/.env
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  frontend:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    # Install deps then start Vite bound to 0.0.0.0 so the host can reach it.
+    command: sh -c "npm install && npm run dev -- --host"
+    environment:
+      # Point the SPA at the backend container's published port on the host.
+      VITE_API_BASE_URL: http://localhost:8000/api
+    volumes:
+      - ./frontend:/app
+      # Anonymous volume keeps container node_modules from being shadowed by the
+      # host bind-mount (host may lack platform-native binaries).
+      - /app/node_modules
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

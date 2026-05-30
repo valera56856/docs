@@ -1,0 +1,106 @@
+/* Tailwind CSS layers — components/pages style with Tailwind utilities plus
+   arbitrary values that read the NextCRM tokens (e.g. bg-[var(--color-blue)]).
+   Preflight (base) comes first; the custom resets below intentionally override
+   it where the PWA needs more (safe-area padding, 44px touch targets). */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Global base styles for the Valeraup PWA.
+ *
+ * Mobile-first reset + brand defaults. Reads exclusively from the design tokens
+ * declared in tokens.css so the look stays consistent and themeable.
+ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-base);
+  line-height: var(--line-height-normal);
+  color: var(--color-text);
+  background-color: var(--color-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Respect device notch / home indicator on installed PWA. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+#root {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+img,
+picture,
+svg,
+video {
+  display: block;
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Honor the global minimum touch target on interactive controls. */
+button {
+  min-height: var(--touch-target-min);
+  cursor: pointer;
+}
+
+a {
+  color: var(--color-blue);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* Visible, consistent focus ring for keyboard users (accessibility). */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  line-height: var(--line-height-tight);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* Respect users who prefer reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,0 +1,3 @@
+# Valeraup is an internal operations tool — keep it out of search indexes.
+User-agent: *
+Disallow: /

@@ -1,0 +1,7 @@
+# Placeholder so the icons/ directory is tracked by git.
+#
+# Add the PWA app icons here before the first production build:
+#   - icon-192.png  (192x192)
+#   - icon-512.png  (512x512)
+# Both are referenced by vite.config.ts, public/manifest.webmanifest and index.html.
+# Use the NextCRM navy (#0A1A3F) background with a maskable safe zone.

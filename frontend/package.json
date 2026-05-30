@@ -1,0 +1,48 @@
+{
+  "name": "valeraup-frontend",
+  "private": true,
+  "version": "2.2.0",
+  "type": "module",
+  "description": "Valeraup PWA — photograph a supplier invoice, OCR with Gemini, map SKUs to SalesDrive, generate an .xlsx receipt.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "storybook": "storybook dev -p 6006",
+    "build-storybook": "storybook build",
+    "lint": "eslint . --ext .ts,.tsx",
+    "cap:sync": "cap sync"
+  },
+  "dependencies": {
+    "react": "^19",
+    "react-dom": "^19",
+    "react-router-dom": "^7",
+    "@capacitor/core": "^6",
+    "@capacitor/app": "^6",
+    "@capacitor/camera": "^6",
+    "lucide-react": "^0.4",
+    "class-variance-authority": "^0.7",
+    "@radix-ui/react-slot": "^1",
+    "clsx": "^2",
+    "tailwind-merge": "^2"
+  },
+  "devDependencies": {
+    "typescript": "^5.6",
+    "vite": "^6",
+    "@vitejs/plugin-react": "^4",
+    "vite-plugin-pwa": "^0.21",
+    "@capacitor/cli": "^6",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@storybook/react": "^8",
+    "@storybook/react-vite": "^8",
+    "@storybook/addon-essentials": "^8",
+    "storybook": "^8",
+    "tailwindcss": "^3.4",
+    "postcss": "^8.4",
+    "autoprefixer": "^10.4",
+    "eslint": "^9",
+    "@typescript-eslint/eslint-plugin": "^8",
+    "@typescript-eslint/parser": "^8"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "Valeraup",
+  "short_name": "Valeraup",
+  "description": "Photograph a supplier invoice, recognize line items, map SKUs, generate an Excel receipt for SalesDrive.",
+  "lang": "uk",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0A1A3F",
+  "background_color": "#0A1A3F",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

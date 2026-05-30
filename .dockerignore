@@ -1,0 +1,52 @@
+# Keep Docker build contexts small and reproducible by excluding local cruft,
+# secrets, and platform-specific artifacts that should never enter an image.
+
+# Version control
+.git/
+.gitignore
+
+# Secrets / environment (images receive config via env_file / runtime env)
+.env
+.env.*
+!.env.example
+**/.env
+!**/.env.example
+
+# Python caches & virtualenvs
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.sqlite3
+
+# Django local artifacts (regenerated inside the container)
+staticfiles/
+media/
+
+# Node / frontend (built in their own stage; never copy host node_modules)
+node_modules/
+dist/
+dist-ssr/
+storybook-static/
+.vite/
+
+# Capacitor native projects
+android/
+ios/
+
+# Docs & CI (not needed at runtime)
+docs/
+.github/
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~

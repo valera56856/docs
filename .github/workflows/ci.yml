@@ -1,0 +1,123 @@
+# Valeraup CI — runs on every push and pull request.
+#
+# Two independent jobs (no shared state, run in parallel):
+#   backend  — Python 3.12: install deps, `manage.py check`, then pytest.
+#   frontend — Node 22: npm ci, type-check (tsc -b), production build.
+#
+# The backend job spins up Postgres + Redis service containers so that
+# `manage.py check` and the test suite can talk to a real database/broker,
+# matching the docker-compose runtime as closely as possible.
+
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (Django + pytest)
+    runs-on: ubuntu-latest
+
+    # Service containers available on localhost to the job steps.
+    services:
+      db:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: valeraup
+          POSTGRES_PASSWORD: valeraup
+          POSTGRES_DB: valeraup
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U valeraup -d valeraup"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Mirror the keys the Django settings read via django-environ. These are
+    # CI-only throwaway values; real secrets live in the deploy environment.
+    env:
+      SECRET_KEY: ci-secret-key-not-for-prod
+      DEBUG: "True"
+      ALLOWED_HOSTS: localhost,127.0.0.1
+      CORS_ALLOWED_ORIGINS: http://localhost:5173
+      DATABASE_URL: postgres://valeraup:valeraup@localhost:5432/valeraup
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/1
+      GEMINI_API_KEY: ci-placeholder
+      GEMINI_MODEL: gemini-2.5-flash
+      SALESDRIVE_YML_URL: https://example.salesdrive.ua/export/yml/
+      ACCESS_TOKEN_LIFETIME_MIN: "15"
+      REFRESH_TOKEN_LIFETIME_DAYS: "30"
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Django system check
+        run: python manage.py check
+
+      - name: Run tests
+        run: pytest -q
+
+  frontend:
+    name: Frontend (type-check + build)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        # `npm ci` requires a lockfile; fall back to `npm install` if the repo
+        # has not committed one yet (early scaffold stage).
+        run: npm ci || npm install
+
+      - name: Type-check
+        run: npx tsc -b
+
+      - name: Build
+        run: npm run build
