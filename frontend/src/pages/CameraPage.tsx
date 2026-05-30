@@ -35,7 +35,11 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Camera as CameraIcon, ImagePlus, ScanLine } from 'lucide-react';
 
 import { receipts as receiptsApi } from '@/lib/api';
-import { capturePhoto, CameraCancelledError } from '@/lib/camera';
+import {
+  capturePhoto,
+  CameraCancelledError,
+  downscaleImage,
+} from '@/lib/camera';
 import { CameraCapture } from '@/components/CameraCapture';
 import { Button } from '@/components/ui/Button';
 import { EmptyState } from '@/components/ui/EmptyState';
@@ -106,7 +110,10 @@ export function CameraPage(): JSX.Element {
           setReceiptId(draft.id);
         }
 
-        const result = await receiptsApi.uploadPhoto(targetId, file);
+        // Shrink big phone photos before upload — faster upload + OCR, same
+        // legibility. Falls back to the original if it can't be re-encoded.
+        const optimized = await downscaleImage(file);
+        const result = await receiptsApi.uploadPhoto(targetId, optimized);
         setPhotos((prev) => [
           ...prev,
           { id: result.id, imageUrl: result.image_url },

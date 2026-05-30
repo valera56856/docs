@@ -104,6 +104,65 @@ export function canvasToJpegFile(
 }
 
 /**
+ * Downscale + re-encode an image so uploads (and the Gemini OCR call) stay fast.
+ *
+ * Phone cameras produce 5–12 MP JPEGs of several MB; sending those raw is slow on
+ * mobile networks and makes the Vision call costlier/slower for no accuracy gain
+ * (invoice text stays legible well below full resolution). We draw the image onto
+ * a canvas scaled so its longer edge is at most `maxEdge`, then export JPEG at
+ * `quality`. Anything undecodable (e.g. HEIC on some browsers) or already small
+ * is returned unchanged so a shot is never lost to compression.
+ *
+ * @param file - Source image (camera frame or picked file).
+ * @param maxEdge - Max length of the longer side in px (default 1600).
+ * @param quality - JPEG quality 0–1 (default 0.82).
+ * @returns A `Promise` resolving to a (usually smaller) JPEG {@link File}.
+ */
+export async function downscaleImage(
+  file: File,
+  maxEdge = 1600,
+  quality = 0.82,
+): Promise<File> {
+  if (!file.type.startsWith('image/')) return file;
+
+  let bitmap: ImageBitmap;
+  try {
+    bitmap = await createImageBitmap(file);
+  } catch {
+    return file; // undecodable (e.g. HEIC) — upload as-is rather than lose it.
+  }
+
+  const longest = Math.max(bitmap.width, bitmap.height);
+  const scale = Math.min(1, maxEdge / longest);
+  // Already small enough on both dimension and disk size: keep original bytes.
+  if (scale >= 1 && file.size < 1_200_000) {
+    bitmap.close();
+    return file;
+  }
+
+  const w = Math.round(bitmap.width * scale);
+  const h = Math.round(bitmap.height * scale);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    bitmap.close();
+    return file;
+  }
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((b) => resolve(b), 'image/jpeg', quality);
+  });
+  if (!blob) return file;
+
+  const name = file.name.replace(/\.[^.]+$/, '') + '.jpg';
+  return new File([blob], name, { type: 'image/jpeg' });
+}
+
+/**
  * Capture a photo on the native (Capacitor) path.
  *
  * @param quality - JPEG quality 0–100.
