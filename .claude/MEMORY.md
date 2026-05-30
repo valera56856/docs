@@ -16,6 +16,7 @@ fail2ban; DRF throttling (Redis-кеш, pin 5/хв login 10/хв); IDOR-scope н
 - **Throttling потребує спільного кешу** (Redis у проді; LocMem per-worker → bypass).
 - **Tailwind arbitrary** потребує type-hint: `text-[length:var(...)]` / `text-[color:var(...)]`.
 - **`.gitignore` `lib/`** ловив `frontend/src/lib/` (прибрано). Email-логін: не делегувати в SimpleJWT super().validate. colima reload ненадійний → `docker compose restart`; caddy-config → `up -d --force-recreate caddy`. Тести на Postgres не sqlite. Лог extra-ключі ≠ полям LogRecord. python-json-logger тримати <3.
+- **PWA stale-cache:** після передеплою фронту клієнти бачать старий UI, поки service-worker не оновиться → reload/перевідкрити (перевіряти прод з очищенням SW). Точка входу скану: головна → «Сканувати накладну» (камера) → /receipt/new.
 
 ## Архітектура
 `IntegrationSettings` singleton — SalesDrive YML у БД (UI `/api/settings/salesdrive/`). Маппінг детермінований по нормалізованому supplier_sku per-supplier (без fuzzy), `remember_mapping` навчається. `ReceiptPhoto.image` (R2/storage) для OCR-байтів. Авто-постачальник: gemini повертає {supplier:{name,edrpou}, lines}; match_or_create по ЄДРПОУ→назві; Receipt.supplier nullable + recognized_supplier; PATCH supplier перемапить. Авторизація рольова (IsAdmin по Profile.role). Деплой: `docker compose -f docker-compose.prod.yml --env-file .env.prod build && up -d`, ніколи `down -v`.
